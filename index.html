@@ -41,6 +41,9 @@
   .overlay button:active { transform: scale(.97); }
   .opts { margin-top: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--muted); }
   .opts label { display: flex; align-items: center; gap: 8px; justify-content: center; }
+  .cars { flex-direction: row; justify-content: center; gap: 8px; margin-top: 14px; }
+  .cars button { font: inherit; font-weight: 600; font-size: 14px; padding: 8px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: var(--ink); }
+  .cars button.on { background: var(--accent); color: #1a1200; border-color: transparent; }
   .opts input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
   .opts .file { flex-direction: column; gap: 4px; }
   .opts input[type=file] { font-size: 12px; max-width: 240px; }
@@ -62,7 +65,12 @@
   <h1>Занос</h1>
   <div class="sub">Машина едет сама. Держите палец на левой или правой половине экрана: чем дольше держите, тем глубже занос; отпустите — выровняется. Очки — за угол и длину заноса. Вылет с трассы — конец заезда.</div>
   <button type="button" id="go">Поехали</button>
-  <div class="sub" style="font-size:12px;margin-top:6px">Модель AE86 — Martin Trafas, Sketchfab, CC BY 4.0</div>
+  <div class="opts cars" id="cars">
+    <button type="button" data-car="ae86">AE86 Trueno</button>
+    <button type="button" data-car="rx7">RX-7 FD</button>
+    <button type="button" data-car="passat">Passat Alltrack</button>
+  </div>
+  <div class="sub" style="font-size:12px;margin-top:6px">Модели: AE86 — Martin Trafas; Passat B8 Variant — Nieve5677 (Sketchfab, CC BY 4.0)</div>
   <div class="opts">
     <label><input type="checkbox" id="optSfx" checked> звук шин и мотора</label>
     <label><input type="checkbox" id="optMusic" checked> евробит</label>
@@ -456,42 +464,56 @@
   })();
   scene.add(carMesh);
 
-  // Настоящая AE86: модель Martin Trafas (Sketchfab, CC BY 4.0), упрощена с
-  // 706 до 40 тыс. граней. Пока грузится — едет блочная; при ошибке остаётся она.
-  // В файле нос смотрит в -Z (glTF, Y вверх), длина ~423 → масштаб к нашим 52.
-  const gltfCar = { root: null, wheels: [], lamps: null };
-  if (THREE.GLTFLoader) new THREE.GLTFLoader().load('ae86.glb', g => {
-    const root = g.scene;
-    const box = new THREE.Box3().setFromObject(root);
-    const len = box.max.z - box.min.z, sc = 52 / len;
-    root.scale.setScalar(sc);
-    root.rotation.y = Math.PI / 2;                                    // -Z (нос) → +X
-    root.position.set(0, -box.min.y * sc, 0);
-    // «панда» Такуми: основной цвет — белый, нижние панели — чёрные
-    root.traverse(o => {
-      if (o.isMesh) { o.castShadow = true; o.receiveShadow = false;
-        const m = o.material; if (!m) return;
-        if (m.name === 'Windows') { m.transparent = true; m.opacity = 0.8; }
-        if (m.name === 'Primary') { m.color.set(0xf4f4ef); m.map = null; m.roughness = 0.35; m.metalness = 0.15; m.needsUpdate = true; }
-        if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; }
+  // Машины: glTF-модели, у каждой — своя ориентация носа и способ найти колёса.
+  // Пока грузится — едет блочная AE86; при ошибке загрузки остаётся она.
+  const CARS = {
+    ae86:   { file: 'ae86.glb',   name: 'Toyota AE86 Trueno', rotY: Math.PI / 2, axis: 'z', wheels: ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel'], wheelAxis: 'x',
+              paint: m => { if (m.name === 'Windows') { m.transparent = true; m.opacity = 0.8; }
+                            if (m.name === 'Primary') { m.color.set(0xf4f4ef); m.map = null; m.roughness = 0.35; m.metalness = 0.15; m.needsUpdate = true; }
+                            if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
+    rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: [], wheelAxis: 'x' },
+    passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z',
+              wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
+  };
+  let carId = 'ae86';
+  try { carId = localStorage.getItem('drift.car') || 'ae86'; if (!CARS[carId]) carId = 'ae86'; } catch (e) {}
+  const gltfCar = { root: null, wheels: [], lamps: null, id: null };
+  function loadCar(id) {
+    const cfg = CARS[id]; if (!cfg || !THREE.GLTFLoader) return;
+    if (gltfCar.root) { scene.remove(gltfCar.root); gltfCar.root = null; gltfCar.wheels = []; carMesh.visible = true; }
+    gltfCar.id = id;
+    new THREE.GLTFLoader().load(cfg.file, g => {
+      if (gltfCar.id !== id) return;                                  // пока грузилась, выбрали другую
+      const root = g.scene;
+      const box = new THREE.Box3().setFromObject(root);
+      const len = cfg.axis === 'z' ? box.max.z - box.min.z : box.max.x - box.min.x, sc = 52 / len;
+      root.scale.setScalar(sc); root.rotation.y = cfg.rotY;
+      const c = box.getCenter(new THREE.Vector3());
+      root.position.set(0, -box.min.y * sc, 0);
+      // центр модели — в начало координат по горизонтали (после поворота)
+      const off = new THREE.Vector3(-c.x * sc, 0, -c.z * sc).applyAxisAngle(new THREE.Vector3(0, 1, 0), cfg.rotY);
+      root.position.add(off);
+      root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; if (o.material && cfg.paint) cfg.paint(o.material); } });
+      const named = {}; root.traverse(o => { named[o.name] = o; });
+      for (const k of cfg.wheels) {
+        const n = named[k]; if (!n) continue;
+        const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
+        n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
+        // передние — по положению вдоль оси движения после поворота
+        const wp = new THREE.Vector3(); n.getWorldPosition(wp);
+        gltfCar.wheels.push({ node: n, pivot, front: null, wp });
       }
-    });
-    // колёса — по именам узлов; фары — узлы Headlights
-    const named = {};
-    root.traverse(o => { named[o.name] = o; });
-    // колесо: шарнир руля (поворот вокруг Y) — отдельная группа в точке колеса,
-    // само колесо внутри неё вращается вокруг своей оси; иначе оси складываются
-    for (const k of ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel']) {
-      const n = named[k]; if (!n) continue;
-      const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
-      n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
-      gltfCar.wheels.push({ node: n, pivot, front: k[0] === 'F' });
-    }
-    gltfCar.lamps = null;                                              // фары — как в модели, без анимации
-    carMesh.visible = false;
-    const holder = new THREE.Group(); holder.add(root); scene.add(holder);
-    gltfCar.root = holder;
-  }, undefined, err => console.warn('AE86 model not loaded, using blocks', err));
+      if (gltfCar.wheels.length) {
+        const xs = gltfCar.wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+        gltfCar.wheels.forEach(w => { w.front = w.wp.x > mid; });
+      }
+      carMesh.visible = false;
+      const holder = new THREE.Group(); holder.add(root); scene.add(holder);
+      gltfCar.root = holder;
+    }, undefined, err => console.warn('model not loaded, using blocks', err));
+  }
+  const qc = new URLSearchParams(location.search).get('car'); if (qc && CARS[qc]) carId = qc;
+  loadCar(carId);
 
   // дым — спрайты
   const smokeTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
@@ -551,7 +573,8 @@
     body.rotation.z = -car.slip * 0.06;                                     // лёгкий крен в заносе
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
-      for (const w of gltfCar.wheels) { w.node.rotation.x -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      const ax = CARS[gltfCar.id].wheelAxis;
+      for (const w of gltfCar.wheels) { w.node.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
@@ -689,6 +712,9 @@
     musicTimer = setInterval(musicTick, 100); musicTick();
   }
   function musicStop() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } if (userTrack) userTrack.pause(); }
+  function markCar() { document.querySelectorAll('#cars button').forEach(b => b.classList.toggle('on', b.dataset.car === carId)); }
+  document.querySelectorAll('#cars button').forEach(b => b.addEventListener('click', () => { carId = b.dataset.car; try { localStorage.setItem('drift.car', carId); } catch (e) {} markCar(); loadCar(carId); }));
+  markCar();
   $('optSfx').addEventListener('change', e => { audio.sfx = e.target.checked; });
   $('optMusic').addEventListener('change', e => { audio.music = e.target.checked; if (!audio.music) musicStop(); else if (running) musicStart(); });
   $('optFile').addEventListener('change', e => {
