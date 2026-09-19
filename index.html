@@ -391,6 +391,9 @@
       const dx = p1[0] - p0[0], dy = p1[1] - p0[1], l = Math.hypot(dx, dy) || 1;
       for (const side of [-1, 1]) {
         const px = p0[0] + (-dy / l) * side * (TRACK_W / 2 + 26), py = p0[1] + (dx / l) * side * (TRACK_W / 2 + 26);
+        // там, где ветки трассы сближаются, столбик одной ветки попадал бы на
+        // другую — ставим только если до любой части трассы не ближе обочины
+        if (nearest(px, py).d < TRACK_W / 2 + 22) continue;
         const post = new THREE.Mesh(postG, postM); post.position.set(px, 4.5, py); post.castShadow = true; scene.add(post);
         const cap = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.6, 2.6), capM); cap.position.set(px, 8.5, py); scene.add(cap);
       }
