@@ -221,7 +221,7 @@
     // поворот, к полутора секундам — полноценный занос с малым сцеплением.
     // После отпускания глубина не обнуляется, а тает: занос затухает по инерции.
     const target = drifting ? Math.min(1, hold / 1.4) : 0;
-    car.depth += (target - car.depth) * (drifting ? 3.5 : 1.6) * dt;
+    car.depth += (target - car.depth) * (drifting ? 3.5 : 0.9) * dt;
     const depth = car.depth;
 
     vf += P.accel * dt * (1 - Math.max(0, vf) / P.maxSpeed);
@@ -233,11 +233,11 @@
     // целевую скорость, корпус набирает и сбрасывает её не мгновенно
     const speedFactor = Math.min(1, car.speed / 180);
     const turnTarget = steer * (P.turnNormal + (P.turnDrift - P.turnNormal) * depth) * speedFactor;
-    car.w += (turnTarget - car.w) * (steer ? 6 : 2.2) * dt;
+    car.w += (turnTarget - car.w) * (steer ? 6 : 1.5) * dt;
     car.a += car.w * dt;
     if (!steer && Math.abs(car.slip) > 0.05) {
       // самовыравнивание: корпус доворачивается к направлению движения, медленнее при глубоком заносе
-      car.a += Math.sign(car.slip) * Math.min(Math.abs(car.slip), (2.6 - 1.4 * depth) * dt);
+      car.a += Math.sign(car.slip) * Math.min(Math.abs(car.slip), (2.0 - 1.4 * depth) * dt);
     }
 
     car.vx = f[0] * vf + r[0] * vl; car.vy = f[1] * vf + r[1] * vl;
@@ -266,7 +266,7 @@
     } else {
       comboTimer += dt;
       if (driftRun > 0) driftRun = 0;
-      if (comboTimer > 0.8 && combo > 1) { combo = 1; $('combo').textContent = '×1'; }
+      if (comboTimer > 1.2 && combo > 1) { combo = 1; $('combo').textContent = '×1'; }
     }
     $('score').textContent = Math.floor(score);
 
@@ -301,7 +301,7 @@
   function draw() {
     ctx.fillStyle = '#3a4a2f'; ctx.fillRect(0, 0, W, H);
     ctx.save();
-    const cx = W / 2, cy = H * 0.58, ZOOM = 1.5;   // камера чуть ближе: машина крупнее на телефоне
+    const cx = W / 2, cy = H * 0.58, ZOOM = 1.2;   // камера чуть ближе: машина крупнее на телефоне
     ctx.translate(cx, cy); ctx.scale(ZOOM, ZOOM); ctx.translate(-car.x, -car.y);
     ctx.drawImage(world, 0, 0);
     ctx.drawImage(marks, 0, 0);
@@ -385,7 +385,7 @@
   // с углом заноса; мотор — пила через низкочастотный фильтр, высота по
   // скорости; евробит — генеративный луп 155 BPM (своя партия, не чужая запись).
   const audio = { ctx: null, on: false, music: true, sfx: true };
-  let tireGain, tireFilter, engOsc, engGain, musicGain, musicTimer = null, userTrack = null;
+  let tireGain, tireGain2, tireFilter, tireFilter2, engOsc, engGain, musicGain, musicTimer = null, userTrack = null;
   function audioInit() {
     if (audio.ctx) { if (audio.ctx.state === 'suspended') audio.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
@@ -394,9 +394,22 @@
     const len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
-    tireFilter = ac.createBiquadFilter(); tireFilter.type = 'bandpass'; tireFilter.Q.value = 6; tireFilter.frequency.value = 1400;
+    // покрышка «поёт» на двух резонансах: основной узкий (визг) и низкий
+    // широкий (гул скольжения); частота основного дрожит — так звучит
+    // прерывистое схватывание резины (stick-slip)
+    tireFilter = ac.createBiquadFilter(); tireFilter.type = 'bandpass'; tireFilter.Q.value = 14; tireFilter.frequency.value = 1600;
+    tireFilter2 = ac.createBiquadFilter(); tireFilter2.type = 'bandpass'; tireFilter2.Q.value = 2.5; tireFilter2.frequency.value = 420;
     tireGain = ac.createGain(); tireGain.gain.value = 0;
-    src.connect(tireFilter).connect(tireGain).connect(ac.destination); src.start();
+    tireGain2 = ac.createGain(); tireGain2.gain.value = 0;
+    const wobble = ac.createOscillator(), wobbleGain = ac.createGain();
+    wobble.type = 'sine'; wobble.frequency.value = 27; wobbleGain.gain.value = 90;   // дрожание ±90 Гц
+    wobble.connect(wobbleGain).connect(tireFilter.frequency); wobble.start();
+    const shaper = ac.createWaveShaper(); const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = i / 128 - 1; curve[i] = Math.tanh(2.5 * x); }
+    shaper.curve = curve;                                                          // лёгкая перегрузка — «злее»
+    src.connect(tireFilter).connect(shaper).connect(tireGain).connect(ac.destination);
+    src.connect(tireFilter2).connect(tireGain2).connect(ac.destination);
+    src.start();
     // мотор
     engOsc = ac.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 60;
     const engFilter = ac.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.frequency.value = 500;
@@ -410,8 +423,11 @@
     if (!audio.on) return;
     const ac = audio.ctx, t = ac.currentTime;
     const sl = Math.abs(car.slip), squeal = audio.sfx && running && car.speed > 90 ? Math.min(1, Math.max(0, (sl - 0.12) / 0.5)) : 0;
-    tireGain.gain.setTargetAtTime(squeal * 0.5, t, 0.05);
-    tireFilter.frequency.setTargetAtTime(900 + squeal * 1300 + car.speed, t, 0.05);
+    // визг появляется резко и держится, гул — плавно; высота растёт с углом и скоростью
+    tireGain.gain.setTargetAtTime(squeal * 0.42, t, squeal > 0 ? 0.03 : 0.12);
+    tireGain2.gain.setTargetAtTime(squeal * 0.5 + (car.depth > 0.3 ? 0.1 : 0), t, 0.08);
+    tireFilter.frequency.setTargetAtTime(1200 + squeal * 900 + car.speed * 1.5, t, 0.06);
+    tireFilter2.frequency.setTargetAtTime(300 + squeal * 250, t, 0.1);
     engOsc.frequency.setTargetAtTime(50 + car.speed * 0.55, t, 0.05);
     engGain.gain.setTargetAtTime(audio.sfx && running ? 0.05 + car.speed / 3300 : 0, t, 0.1);
   }
