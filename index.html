@@ -224,7 +224,7 @@
     // глубина заноса нарастает с удержанием: в первые полсекунды это мягкий
     // поворот, к полутора секундам — полноценный занос с малым сцеплением.
     // После отпускания глубина не обнуляется, а тает: занос затухает по инерции.
-    const target = drifting ? Math.min(1, hold / 1.2) : 0;
+    const target = drifting ? Math.pow(Math.min(1, hold / 2.0), 1.6) : 0;   // первые полсекунды — почти обычный поворот
     car.depth += (target - car.depth) * (drifting ? 3.5 : 0.6) * dt;
     const depth = car.depth;
 
@@ -479,9 +479,15 @@
     // колёса — по именам узлов; фары — узлы Headlights
     const named = {};
     root.traverse(o => { named[o.name] = o; });
-    for (const k of ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel']) if (named[k]) gltfCar.wheels.push({ node: named[k], front: k[0] === 'F' });
-    gltfCar.lamps = named['Headlights'] || null;
-    if (gltfCar.lamps) gltfCar.lampsY = gltfCar.lamps.position.y;
+    // колесо: шарнир руля (поворот вокруг Y) — отдельная группа в точке колеса,
+    // само колесо внутри неё вращается вокруг своей оси; иначе оси складываются
+    for (const k of ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel']) {
+      const n = named[k]; if (!n) continue;
+      const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
+      n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
+      gltfCar.wheels.push({ node: n, pivot, front: k[0] === 'F' });
+    }
+    gltfCar.lamps = null;                                              // фары — как в модели, без анимации
     carMesh.visible = false;
     const holder = new THREE.Group(); holder.add(root); scene.add(holder);
     gltfCar.root = holder;
@@ -516,7 +522,8 @@
     const tx = car.x, tz = car.y;
     let px, py, pz, lx, ly, lz, k;
     if (view === 'top') {
-      px = tx; py = 430; pz = tz + 60; lx = tx; ly = 0; lz = tz; k = 8;
+      const vx = car.vx / (car.speed || 1), vz = car.vy / (car.speed || 1);
+      px = tx + vx * 110; py = 560; pz = tz + vz * 110 + 40; lx = tx + vx * 110; ly = 0; lz = tz + vz * 110; k = 4;
       camera.up.set(0, 0, -1);
     } else if (view === 'chase') {
       // камера за корпусом: направление усредняется, чтобы в заносе кадр не дёргался
@@ -544,8 +551,7 @@
     body.rotation.z = -car.slip * 0.06;                                     // лёгкий крен в заносе
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
-      for (const w of gltfCar.wheels) { w.node.rotation.x -= spin; if (w.front) w.node.rotation.y = -steer * 0.4; }
-      if (gltfCar.lamps) { const up = steer !== 0 || car.depth > 0.2; gltfCar.lamps.position.y += ((up ? gltfCar.lampsY + 7 : gltfCar.lampsY) - gltfCar.lamps.position.y) * Math.min(1, 8 * dt); }
+      for (const w of gltfCar.wheels) { w.node.rotation.x -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
