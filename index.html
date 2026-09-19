@@ -36,6 +36,11 @@
   .overlay button { margin-top: 18px; font: inherit; font-weight: 700; font-size: 18px; padding: 14px 34px; border-radius: 999px; border: 0;
     background: var(--accent); color: #1a1200; cursor: pointer; }
   .overlay button:active { transform: scale(.97); }
+  .opts { margin-top: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--muted); }
+  .opts label { display: flex; align-items: center; gap: 8px; justify-content: center; }
+  .opts input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+  .opts .file { flex-direction: column; gap: 4px; }
+  .opts input[type=file] { font-size: 12px; max-width: 240px; }
   .zones { position: fixed; inset: 0; display: flex; pointer-events: none; }
   .zones div { flex: 1; }
   .zones div.on { background: radial-gradient(ellipse at 50% 100%, rgba(255,176,0,.10), transparent 70%); }
@@ -53,6 +58,11 @@
   <h1>Занос</h1>
   <div class="sub">Машина едет сама. Держите палец на левой или правой половине экрана: чем дольше держите, тем глубже занос; отпустите — выровняется. Очки — за угол и длину заноса. Вылет с трассы — конец заезда.</div>
   <button type="button" id="go">Поехали</button>
+  <div class="opts">
+    <label><input type="checkbox" id="optSfx" checked> звук шин и мотора</label>
+    <label><input type="checkbox" id="optMusic" checked> евробит</label>
+    <label class="file">своя музыка (mp3 с телефона) <input type="file" id="optFile" accept="audio/*"></label>
+  </div>
 </div>
 <div class="overlay" id="over" hidden>
   <div class="rec" id="recLabel">Заезд окончен</div>
@@ -144,32 +154,21 @@
     const trace = () => { wc.beginPath(); PATH.forEach((p, i) => i ? wc.lineTo(p[0], p[1]) : wc.moveTo(p[0], p[1])); wc.closePath(); };
     wc.lineJoin = 'round'; wc.lineCap = 'round';
     trace(); wc.strokeStyle = '#b89a62'; wc.lineWidth = TRACK_W + 34; wc.stroke();      // песчаная обочина
-    trace(); wc.strokeStyle = '#d0d0cc'; wc.lineWidth = TRACK_W + 10; wc.stroke();      // поребрик-основа
-    trace(); wc.strokeStyle = '#2a2b2e'; wc.lineWidth = TRACK_W; wc.stroke();           // асфальт
-    // красно-белые поребрики по краям
-    wc.setLineDash([26, 26]);
-    wc.lineWidth = 6;
-    for (const side of [-1, 1]) {
-      wc.beginPath();
-      PATH.forEach((p, i) => {
-        const q = PATH[(i + 1) % N];
-        const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1;
-        const nx = -dy / l * side * (TRACK_W / 2 + 2), ny = dx / l * side * (TRACK_W / 2 + 2);
-        i ? wc.lineTo(p[0] + nx, p[1] + ny) : wc.moveTo(p[0] + nx, p[1] + ny);
-      });
-      wc.closePath();
-      wc.strokeStyle = '#d9342b'; wc.stroke();
-    }
-    wc.setLineDash([]);
+    trace(); wc.strokeStyle = '#e8e8e4'; wc.lineWidth = TRACK_W + 12; wc.stroke();      // белая основа поребрика
+    wc.setLineDash([24, 24]); wc.lineCap = 'butt';
+    trace(); wc.strokeStyle = '#d9342b'; wc.lineWidth = TRACK_W + 12; wc.stroke();      // красные штрихи поверх
+    wc.setLineDash([]); wc.lineCap = 'round';
+    trace(); wc.strokeStyle = '#2a2b2e'; wc.lineWidth = TRACK_W; wc.stroke();           // асфальт закрывает середину
     // осевая разметка
     trace(); wc.setLineDash([22, 30]); wc.strokeStyle = 'rgba(255,255,255,.28)'; wc.lineWidth = 3; wc.stroke(); wc.setLineDash([]);
-    // стартовая линия
-    const s = PATH[0], s2 = PATH[3];
-    const ang = Math.atan2(s2[1] - s[1], s2[0] - s[0]);
-    wc.save(); wc.translate(s[0], s[1]); wc.rotate(ang);
-    for (let i = -3; i < 3; i++) for (let j = 0; j < 2; j++) {
+    // стартовая линия: шахматка в два ряда поперёк полотна
+    const s0 = PATH[0], s1 = PATH[2];
+    const ang = Math.atan2(s1[1] - s0[1], s1[0] - s0[0]);
+    wc.save(); wc.translate(s0[0], s0[1]); wc.rotate(ang);
+    const cell = TRACK_W / 10;
+    for (let i = -5; i < 5; i++) for (let j = 0; j < 2; j++) {
       wc.fillStyle = (i + j) % 2 ? '#111' : '#eee';
-      wc.fillRect(j * 8 - 8, i * TRACK_W / 6, 8, TRACK_W / 6);
+      wc.fillRect(j * cell - cell, i * cell, cell, cell);
     }
     wc.restore();
   }
@@ -180,11 +179,11 @@
   const mc = marks.getContext('2d');
 
   // ── машина ───────────────────────────────────────────────────────────────
-  const car = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0 };
+  const car = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0, w: 0, depth: 0 };
   const P = {
     accel: 260, maxSpeed: 330, drag: 0.35,
-    gripNormal: 7.5, gripDrift: 1.3,
-    turnNormal: 1.6, turnDrift: 3.0,
+    gripNormal: 6.5, gripDrift: 1.2,
+    turnNormal: 1.7, turnDrift: 3.2,
     minDriftSpeed: 100, slipMin: 0.2,
   };
   let steer = 0;               // -1 влево, 1 вправо, 0 отпущено
@@ -198,7 +197,7 @@
   function reset() {
     const s = PATH[0], s2 = PATH[4];
     car.x = s[0]; car.y = s[1]; car.a = Math.atan2(s2[1] - s[1], s2[0] - s[0]);
-    car.vx = Math.cos(car.a) * 60; car.vy = Math.sin(car.a) * 60; car.slip = 0; car.speed = 60;
+    car.vx = Math.cos(car.a) * 60; car.vy = Math.sin(car.a) * 60; car.slip = 0; car.speed = 60; car.w = 0; car.depth = 0;
     score = 0; combo = 1; comboTimer = 0; driftRun = 0; bestDrift = 0; laps = 0; lastIdx = 0;
     mc.clearRect(0, 0, WORLD, WORLD);
     particles.length = 0;
@@ -219,20 +218,26 @@
     const drifting = steer !== 0 && car.speed > P.minDriftSpeed;
     hold = steer ? hold + dt : 0;
     // глубина заноса нарастает с удержанием: в первые полсекунды это мягкий
-    // поворот, к полутора секундам — полноценный занос с малым сцеплением
-    const depth = Math.min(1, hold / 1.4);
+    // поворот, к полутора секундам — полноценный занос с малым сцеплением.
+    // После отпускания глубина не обнуляется, а тает: занос затухает по инерции.
+    const target = drifting ? Math.min(1, hold / 1.4) : 0;
+    car.depth += (target - car.depth) * (drifting ? 3.5 : 1.6) * dt;
+    const depth = car.depth;
 
     vf += P.accel * dt * (1 - Math.max(0, vf) / P.maxSpeed);
-    vf *= Math.exp(-P.drag * dt * (drifting ? 1 + 0.8 * depth : 1));
-    const grip = drifting ? P.gripNormal + (P.gripDrift - P.gripNormal) * depth : P.gripNormal;
+    vf *= Math.exp(-P.drag * dt * (1 + 0.8 * depth));
+    const grip = P.gripNormal + (P.gripDrift - P.gripNormal) * depth;
     vl *= Math.exp(-grip * dt);
 
+    // вращение корпуса — через угловую скорость с инерцией: руль задаёт
+    // целевую скорость, корпус набирает и сбрасывает её не мгновенно
     const speedFactor = Math.min(1, car.speed / 180);
-    const turn = drifting ? P.turnNormal + (P.turnDrift - P.turnNormal) * depth : P.turnNormal;
-    car.a += steer * turn * speedFactor * dt;
-    if (!drifting && Math.abs(car.slip) > 0.05) {
-      // самовыравнивание после заноса: корпус доворачивается к направлению движения
-      car.a += Math.sign(car.slip) * Math.min(Math.abs(car.slip), 4 * dt);
+    const turnTarget = steer * (P.turnNormal + (P.turnDrift - P.turnNormal) * depth) * speedFactor;
+    car.w += (turnTarget - car.w) * (steer ? 6 : 2.2) * dt;
+    car.a += car.w * dt;
+    if (!steer && Math.abs(car.slip) > 0.05) {
+      // самовыравнивание: корпус доворачивается к направлению движения, медленнее при глубоком заносе
+      car.a += Math.sign(car.slip) * Math.min(Math.abs(car.slip), (2.6 - 1.4 * depth) * dt);
     }
 
     car.vx = f[0] * vf + r[0] * vl; car.vy = f[1] * vf + r[1] * vl;
@@ -250,11 +255,11 @@
       if (driftRun > 1.5 * combo && combo < 8) { combo++; $('combo').textContent = '×' + combo; }
       bestDrift = Math.max(bestDrift, driftRun);
       // следы шин
-      const back = [car.x - f[0] * 14, car.y - f[1] * 14];
+      const back = [car.x - f[0] * 18, car.y - f[1] * 18];
       mc.strokeStyle = 'rgba(15,15,15,' + Math.min(0.7, Math.abs(car.slip)) + ')';
       mc.lineWidth = 4;
       for (const side of [-1, 1]) {
-        const px = back[0] + r[0] * side * 8, py = back[1] + r[1] * side * 8;
+        const px = back[0] + r[0] * side * 11, py = back[1] + r[1] * side * 11;
         mc.beginPath(); mc.moveTo(px - car.vx * dt, py - car.vy * dt); mc.lineTo(px, py); mc.stroke();
       }
       if (Math.random() < 0.7) puff(back[0] + r[0] * (Math.random() - .5) * 16, back[1] + r[1] * (Math.random() - .5) * 16, Math.abs(car.slip));
@@ -280,6 +285,7 @@
 
   function crash() {
     running = false;
+    musicStop();
     const total = Math.floor(score);
     let isRecord = false;
     if (total > best) { best = total; isRecord = true; try { localStorage.setItem('drift.best', best); } catch (e) {} }
@@ -295,7 +301,7 @@
   function draw() {
     ctx.fillStyle = '#3a4a2f'; ctx.fillRect(0, 0, W, H);
     ctx.save();
-    const cx = W / 2, cy = H * 0.58, ZOOM = 1.25;   // камера чуть ближе: машина крупнее на телефоне
+    const cx = W / 2, cy = H * 0.58, ZOOM = 1.5;   // камера чуть ближе: машина крупнее на телефоне
     ctx.translate(cx, cy); ctx.scale(ZOOM, ZOOM); ctx.translate(-car.x, -car.y);
     ctx.drawImage(world, 0, 0);
     ctx.drawImage(marks, 0, 0);
@@ -311,23 +317,38 @@
     ctx.restore();
   }
 
-  // AE86 Trueno в «панде»: белый верх, чёрный низ по бортам и бамперам,
-  // выдвижные фары, чёрные стёкла. Нос — вправо (по оси X), 40×18.
+  // AE86 Trueno (трёхдверный хэтчбек) в «панде»: длинный капот, кабина
+  // смещена к корме, квадратные выдвижные фары подняты, спойлер на крышке
+  // багажника, чёрный низ по бортам и бамперам. Нос — вправо, 52×22.
   function drawCar(c) {
-    c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(-21, -10, 42, 22);                           // тень
+    c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(-27, -12, 54, 26);                          // тень
     c.fillStyle = '#111';
-    [[-15, -12], [-15, 7], [9, -12], [9, 7]].forEach(([x, y]) => c.fillRect(x, y, 8, 5));       // колёса
-    c.fillStyle = '#151515'; c.beginPath(); c.roundRect(-20, -9, 40, 18, 3); c.fill();          // чёрный низ
-    c.fillStyle = '#f4f4f0'; c.beginPath(); c.roundRect(-19, -6.5, 38, 13, 2.5); c.fill();      // белый верх
-    c.fillStyle = '#f4f4f0'; c.fillRect(6, -8.5, 12, 17);                                       // белый капот до крыльев
-    c.fillStyle = '#151515'; c.fillRect(18, -9, 2.5, 18);                                       // передний бампер
-    c.fillStyle = '#1a1a1a'; c.fillRect(-5, -6, 10, 12);                                        // крыша и стёкла
-    c.fillStyle = '#f4f4f0'; c.fillRect(-3, -4, 6, 8);                                          // крыша (светлая)
-    c.fillStyle = '#1a1a1a'; c.fillRect(-13, -6.5, 8, 13);                                      // заднее стекло
-    c.fillStyle = steer ? '#ffe9a8' : '#2a2a2a';                                                // выдвижные фары
-    c.fillRect(13, -8, 5, 4); c.fillRect(13, 4, 5, 4);
-    c.fillStyle = steer ? '#ff4b3e' : '#7a1f18'; c.fillRect(-20, -7, 2, 4); c.fillRect(-20, 3, 2, 4); // стопы
-    c.fillStyle = '#9a9a9a'; c.fillRect(-21, -2, 2, 4);                                          // глушитель
+    [[-19, -14], [-19, 9], [13, -14], [13, 9]].forEach(([x, y]) => c.fillRect(x, y, 9, 5));     // колёса
+    // чёрный низ (пороги и бамперы) — чуть шире кузова
+    c.fillStyle = '#141414'; c.beginPath(); c.roundRect(-26, -11, 52, 22, 3); c.fill();
+    // белый кузов: клиновидный нос, прямая корма
+    c.fillStyle = '#f5f5f1';
+    c.beginPath(); c.moveTo(-24, -8.5); c.lineTo(14, -8.5); c.lineTo(23, -6.5); c.lineTo(23, 6.5); c.lineTo(14, 8.5); c.lineTo(-24, 8.5); c.closePath(); c.fill();
+    // капот: линии-рёбра
+    c.strokeStyle = 'rgba(0,0,0,.18)'; c.lineWidth = 1; c.beginPath(); c.moveTo(4, -6); c.lineTo(20, -5); c.moveTo(4, 6); c.lineTo(20, 5); c.stroke();
+    // лобовое стекло (наклонное), крыша, заднее стекло хэтчбека
+    c.fillStyle = '#1c1f24';
+    c.beginPath(); c.moveTo(4, -7.5); c.lineTo(-2, -7.5); c.lineTo(-4, 7.5); c.lineTo(4, 7.5); c.closePath(); c.fill();   // лобовое
+    c.fillStyle = '#f5f5f1'; c.fillRect(-11, -7, 8, 14);                                                                  // крыша
+    c.fillStyle = '#1c1f24'; c.beginPath(); c.moveTo(-11, -7.5); c.lineTo(-20, -6.5); c.lineTo(-20, 6.5); c.lineTo(-11, 7.5); c.closePath(); c.fill(); // заднее стекло
+    // боковые стёкла — тёмная полоса вдоль кабины
+    c.fillStyle = '#1c1f24'; c.fillRect(-12, -8.5, 16, 1.5); c.fillRect(-12, 7, 16, 1.5);
+    // зеркала
+    c.fillStyle = '#141414'; c.fillRect(2, -11, 3, 2.5); c.fillRect(2, 8.5, 3, 2.5);
+    // спойлер
+    c.fillStyle = '#141414'; c.fillRect(-25, -9.5, 3, 19);
+    // выдвижные фары: подняты в заносе (светятся), иначе закрыты
+    if (steer || car.depth > 0.2) { c.fillStyle = '#fff3c4'; c.fillRect(17, -8, 5, 4.5); c.fillRect(17, 3.5, 5, 4.5); c.fillStyle = 'rgba(255,240,180,.35)'; c.fillRect(22, -9, 8, 18); }
+    else { c.fillStyle = '#e6e6e2'; c.fillRect(17, -8, 5, 4.5); c.fillRect(17, 3.5, 5, 4.5); }
+    // задний фонарь-полоса и стопы
+    c.fillStyle = steer ? '#ff3b2e' : '#8c1f18'; c.fillRect(-26.5, -7, 2, 14);
+    // глушитель
+    c.fillStyle = '#9a9a9a'; c.fillRect(-28, 3, 2.5, 3);
   }
 
   let last = 0, frames = 0;
@@ -337,6 +358,7 @@
     const dt = Math.min(0.033, (ts - last) / 1000 || 0.016); last = ts; frames++;
     if (AUTO && running) { const ph = Math.floor(ts / 1100) % 3; steer = ph === 0 ? 1 : ph === 1 ? -1 : 0; }
     if (running) step(dt);
+    audioUpdate();
     draw();
     if (AUTO) document.title = `f${frames} v${car.speed | 0} slip${(car.slip * 57) | 0} s${score | 0} ${running ? '' : 'CRASH'}`;
     requestAnimationFrame(loop);
@@ -358,10 +380,91 @@
   window.addEventListener('keydown', e => { if (e.key === 'ArrowLeft' || e.key === 'a') { touches.set('k', 0); updateSteer(); } if (e.key === 'ArrowRight' || e.key === 'd') { touches.set('k', W); updateSteer(); } });
   window.addEventListener('keyup', e => { if (['ArrowLeft', 'ArrowRight', 'a', 'd'].includes(e.key)) { touches.delete('k'); updateSteer(); } });
 
+  // ── звук: всё синтезом, без файлов ────────────────────────────────────
+  // Визг шин — белый шум через полосовой фильтр, частота и громкость растут
+  // с углом заноса; мотор — пила через низкочастотный фильтр, высота по
+  // скорости; евробит — генеративный луп 155 BPM (своя партия, не чужая запись).
+  const audio = { ctx: null, on: false, music: true, sfx: true };
+  let tireGain, tireFilter, engOsc, engGain, musicGain, musicTimer = null, userTrack = null;
+  function audioInit() {
+    if (audio.ctx) { if (audio.ctx.state === 'suspended') audio.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    const ac = audio.ctx = new AC();
+    // шум для шин
+    const len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+    tireFilter = ac.createBiquadFilter(); tireFilter.type = 'bandpass'; tireFilter.Q.value = 6; tireFilter.frequency.value = 1400;
+    tireGain = ac.createGain(); tireGain.gain.value = 0;
+    src.connect(tireFilter).connect(tireGain).connect(ac.destination); src.start();
+    // мотор
+    engOsc = ac.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 60;
+    const engFilter = ac.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.frequency.value = 500;
+    engGain = ac.createGain(); engGain.gain.value = 0;
+    engOsc.connect(engFilter).connect(engGain).connect(ac.destination); engOsc.start();
+    // музыка
+    musicGain = ac.createGain(); musicGain.gain.value = 0.35; musicGain.connect(ac.destination);
+    audio.on = true;
+  }
+  function audioUpdate() {
+    if (!audio.on) return;
+    const ac = audio.ctx, t = ac.currentTime;
+    const sl = Math.abs(car.slip), squeal = audio.sfx && running && car.speed > 90 ? Math.min(1, Math.max(0, (sl - 0.12) / 0.5)) : 0;
+    tireGain.gain.setTargetAtTime(squeal * 0.5, t, 0.05);
+    tireFilter.frequency.setTargetAtTime(900 + squeal * 1300 + car.speed, t, 0.05);
+    engOsc.frequency.setTargetAtTime(50 + car.speed * 0.55, t, 0.05);
+    engGain.gain.setTargetAtTime(audio.sfx && running ? 0.05 + car.speed / 3300 : 0, t, 0.1);
+  }
+  // евробит: бочка на каждую долю, хэт на «и», бас октавами, синт-аккорды по кругу
+  const BPM = 155, BEAT = 60 / BPM;
+  const CHORDS = [[0, 3, 7], [-4, 0, 3], [-5, -2, 2], [-2, 2, 5]];   // Am, F, G, Em — полутоны от A
+  const BASS = [-24, -24, -28, -28, -29, -29, -26, -26];
+  let musicStep = 0, musicNext = 0;
+  function note(semi, base = 220) { return base * Math.pow(2, semi / 12); }
+  function musicTick() {
+    if (!audio.on || !audio.music || userTrack) return;
+    const ac = audio.ctx;
+    while (musicNext < ac.currentTime + 0.25) {
+      const st = musicStep % 32, bar = Math.floor(musicStep / 8) % 4, t = musicNext;
+      // бочка
+      if (st % 2 === 0) { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.18); o.connect(g).connect(musicGain); o.start(t); o.stop(t + 0.2); }
+      // хэт
+      if (st % 2 === 1) { const b = ac.createBufferSource(); b.buffer = tireFilter.context === ac ? hatBuf(ac) : null; const g = ac.createGain(); g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.06); const f = ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 6000; b.connect(f).connect(g).connect(musicGain); b.start(t); b.stop(t + 0.07); }
+      // бас — октавный «галоп»
+      { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'square'; o.frequency.value = note(BASS[bar * 2 + ((st >> 2) & 1)] + (st % 2 ? 12 : 0)); g.gain.setValueAtTime(0.18, t); g.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 0.45); o.connect(g).connect(musicGain); o.start(t); o.stop(t + BEAT * 0.5); }
+      // синт-аккорд на 1 и 3 доли, короткий стаб на «и» 2-й
+      if (st % 8 === 0 || st % 8 === 4 || st % 8 === 3) {
+        for (const semi of CHORDS[bar]) { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sawtooth'; o.frequency.value = note(semi + 12); g.gain.setValueAtTime(0.07, t); g.gain.exponentialRampToValueAtTime(0.001, t + BEAT * 0.9); o.connect(g).connect(musicGain); o.start(t); o.stop(t + BEAT); }
+      }
+      musicStep++; musicNext += BEAT / 2;
+    }
+  }
+  let _hat = null;
+  function hatBuf(ac) { if (_hat) return _hat; const n = ac.sampleRate * 0.08, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; return (_hat = b); }
+  function musicStart() {
+    if (!audio.on) return;
+    if (userTrack) { userTrack.play().catch(() => {}); return; }
+    if (musicTimer) return;
+    musicNext = audio.ctx.currentTime + 0.1; musicStep = 0;
+    musicTimer = setInterval(musicTick, 100); musicTick();
+  }
+  function musicStop() { if (musicTimer) { clearInterval(musicTimer); musicTimer = null; } if (userTrack) userTrack.pause(); }
+  $('optSfx').addEventListener('change', e => { audio.sfx = e.target.checked; });
+  $('optMusic').addEventListener('change', e => { audio.music = e.target.checked; if (!audio.music) musicStop(); else if (running) musicStart(); });
+  $('optFile').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    if (userTrack) { userTrack.pause(); URL.revokeObjectURL(userTrack.src); }
+    musicStop();
+    userTrack = new Audio(URL.createObjectURL(f)); userTrack.loop = true; userTrack.volume = 0.6;
+    $('optMusic').checked = true; audio.music = true;
+  });
+
   function start() {
+    audioInit();
     reset();
     $('start').hidden = true; $('over').hidden = true;
     running = true;
+    if (audio.music) musicStart();
     if (document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
   }
   $('go').addEventListener('click', start);
