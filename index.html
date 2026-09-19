@@ -81,7 +81,7 @@
   <div class="rec" id="recLabel">Заезд окончен</div>
   <div class="big" id="finalScore">0</div>
   <div class="sub" id="finalSub"></div>
-  <button type="button" id="again">Ещё раз</button>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><button type="button" id="again">Ещё раз</button><button type="button" id="menu" style="background:#2a2f36;color:var(--ink)">В меню</button></div>
 </div>
 
 <script src="three.min.js"></script>
@@ -471,7 +471,7 @@
               paint: m => { if (m.name === 'Windows') { m.transparent = true; m.opacity = 0.8; }
                             if (m.name === 'Primary') { m.color.set(0xf4f4ef); m.map = null; m.roughness = 0.35; m.metalness = 0.15; m.needsUpdate = true; }
                             if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
-    rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: [], wheelAxis: 'x' },
+    rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x' },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z',
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
@@ -735,6 +735,7 @@
   }
   $('go').addEventListener('click', start);
   $('again').addEventListener('click', start);
+  $('menu').addEventListener('click', () => { $('over').hidden = true; $('start').hidden = false; reset(); });
 
   reset();
   requestAnimationFrame(loop);
