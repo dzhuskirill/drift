@@ -51,7 +51,7 @@
 <div class="zones" aria-hidden="true"><div id="zl"></div><div id="zr"></div></div>
 <div class="hud" aria-live="polite">
   <div><div class="score" id="score">0</div><div class="best">рекорд <span id="best">0</span></div></div>
-  <div class="combo"><b id="combo">×1</b>занос</div>
+  <div class="combo"><b id="combo">×1</b>серия</div>
 </div>
 <div class="hint" id="hint">Держите — занос углубляется, отпустите — выровняется</div>
 <div class="overlay" id="start">
@@ -188,7 +188,7 @@
   };
   let steer = 0;               // -1 влево, 1 вправо, 0 отпущено
   let hold = 0;                // сколько секунд палец держится: чем дольше, тем глубже занос
-  let running = false, score = 0, combo = 1, comboTimer = 0, driftRun = 0, bestDrift = 0, laps = 0, lastIdx = 0;
+  let running = false, score = 0, combo = 1, comboTimer = 0, driftRun = 0, series = 0, bestDrift = 0, laps = 0, lastIdx = 0;
   let best = 0;
   try { best = +localStorage.getItem('drift.best') || 0; } catch (e) {}
   const $ = id => document.getElementById(id);
@@ -198,7 +198,7 @@
     const s = PATH[0], s2 = PATH[4];
     car.x = s[0]; car.y = s[1]; car.a = Math.atan2(s2[1] - s[1], s2[0] - s[0]);
     car.vx = Math.cos(car.a) * 60; car.vy = Math.sin(car.a) * 60; car.slip = 0; car.speed = 60; car.w = 0; car.depth = 0;
-    score = 0; combo = 1; comboTimer = 0; driftRun = 0; bestDrift = 0; laps = 0; lastIdx = 0;
+    score = 0; combo = 1; comboTimer = 0; driftRun = 0; series = 0; bestDrift = 0; laps = 0; lastIdx = 0;
     mc.clearRect(0, 0, WORLD, WORLD);
     particles.length = 0;
     $('score').textContent = '0'; $('combo').textContent = '×1';
@@ -248,11 +248,13 @@
     // очки: угол заноса × скорость, серия растёт пока держится
     const inDrift = Math.abs(car.slip) > P.slipMin && car.speed > P.minDriftSpeed;
     if (inDrift) {
-      driftRun += dt;
+      driftRun += dt; series += dt;
       comboTimer = 0;
       const gain = Math.abs(car.slip) * car.speed * dt * 0.9 * combo;
       score += gain;
-      if (driftRun > 1.5 * combo && combo < 8) { combo++; $('combo').textContent = '×' + combo; }
+      // ступень серии — за каждую секунду заноса подряд; короткие перерывы
+      // (до 1,2 с) серию не обнуляют, поэтому время копится между заносами
+      if (series > combo * 1.0 && combo < 8) { combo++; $('combo').textContent = '×' + combo; if (navigator.vibrate) navigator.vibrate(20); }
       bestDrift = Math.max(bestDrift, driftRun);
       // следы шин
       const back = [car.x - f[0] * 18, car.y - f[1] * 18];
@@ -266,7 +268,7 @@
     } else {
       comboTimer += dt;
       if (driftRun > 0) driftRun = 0;
-      if (comboTimer > 1.2 && combo > 1) { combo = 1; $('combo').textContent = '×1'; }
+      if (comboTimer > 1.2 && (combo > 1 || series > 0)) { combo = 1; series = 0; $('combo').textContent = '×1'; }
     }
     $('score').textContent = Math.floor(score);
 
