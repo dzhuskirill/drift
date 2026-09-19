@@ -182,9 +182,9 @@
   const car = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0, w: 0, depth: 0 };
   const P = {
     accel: 260, maxSpeed: 330, drag: 0.35,
-    gripNormal: 6.5, gripDrift: 0.9,
-    turnNormal: 1.7, turnDrift: 2.3,
-    minDriftSpeed: 100, slipMin: 0.2,
+    gripNormal: 6.5, gripDrift: 0.7, gripCatch: 9,
+    turnNormal: 1.7, turnDrift: 2.4,
+    minDriftSpeed: 100, slipMin: 0.2, slipHold: 0.62,
   };
   let steer = 0;               // -1 влево, 1 вправо, 0 отпущено
   let hold = 0;                // сколько секунд палец держится: чем дольше, тем глубже занос
@@ -226,7 +226,12 @@
 
     vf += P.accel * dt * (1 - Math.max(0, vf) / P.maxSpeed);
     vf *= Math.exp(-P.drag * dt * (1 + 0.45 * depth));
-    const grip = P.gripNormal + (P.gripDrift - P.gripNormal) * depth;
+    // Сцепление в заносе: до «рабочего» угла (~35°) резина скользит свободно,
+    // за ним сцепление быстро растёт — угол упирается в равновесие и держится,
+    // пока держат палец. Так весь поворот проходится в скольжении.
+    const sl0 = Math.abs(car.slip);
+    const over = Math.max(0, sl0 - P.slipHold) / 0.25;
+    const grip = P.gripNormal + (P.gripDrift - P.gripNormal) * depth + over * over * P.gripCatch * depth;
     vl *= Math.exp(-grip * dt);
 
     // вращение корпуса — через угловую скорость с инерцией: руль задаёт
@@ -235,9 +240,10 @@
     const turnTarget = steer * (P.turnNormal + (P.turnDrift - P.turnNormal) * depth) * speedFactor;
     car.w += (turnTarget - car.w) * (steer ? 6 : 1.5) * dt;
     car.a += car.w * dt;
-    if (!steer && Math.abs(car.slip) > 0.05) {
-      // самовыравнивание: корпус доворачивается к направлению движения, медленнее при глубоком заносе
-      car.a += Math.sign(car.slip) * Math.min(Math.abs(car.slip), (2.0 - 1.4 * depth) * dt);
+    if (!steer) {
+      // самовыравнивание: корпус плавно доворачивается к направлению движения
+      // (пропорционально углу — без перескока через ноль и дрожания на прямой)
+      car.a += car.slip * (2.2 - 1.5 * depth) * dt;
     }
 
     car.vx = f[0] * vf + r[0] * vl; car.vy = f[1] * vf + r[1] * vl;
@@ -507,10 +513,11 @@
         let da = Math.atan2(tgt[1] - car.y, tgt[0] - car.x) - car.a;
         da = Math.atan2(Math.sin(da), Math.cos(da));
         steer = da > 0.14 ? 1 : da < -0.14 ? -1 : 0;
-      } else { const ph = Math.floor(t / 1.1) % 3; steer = ph === 0 ? 1 : ph === 1 ? -1 : 0; }
+      } else if (mode === 'hold') { steer = t < 4 ? 1 : 0; }
+      else { const ph = Math.floor(t / 1.1) % 3; steer = ph === 0 ? 1 : ph === 1 ? -1 : 0; }
       step(1 / 60); t += 1 / 60;
       if (mode === 'shot' && t > 9 && Math.abs(car.slip) > 0.3) break;   // кадр в заносе
-      if (i % 60 === 0) log.push(`${t.toFixed(0)}s v${car.speed | 0} slip${(car.slip * 57.3) | 0} d${nearest(car.x, car.y).d | 0} sc${score | 0}`);
+      if (i % (mode === 'hold' ? 15 : 60) === 0) log.push(`${t.toFixed(0)}s v${car.speed | 0} slip${(car.slip * 57.3) | 0} d${nearest(car.x, car.y).d | 0} sc${score | 0}`);
     }
     $('start').hidden = true; draw();
     document.title = (running ? 'ALIVE ' : 'CRASH@' + t.toFixed(1) + 's ') + 'laps' + laps + ' best' + bestDrift.toFixed(1) + ' | ' + log.join(' | ');
