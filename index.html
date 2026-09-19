@@ -48,10 +48,10 @@
   <div><div class="score" id="score">0</div><div class="best">рекорд <span id="best">0</span></div></div>
   <div class="combo"><b id="combo">×1</b>занос</div>
 </div>
-<div class="hint" id="hint">Левая половина — занос влево, правая — вправо</div>
+<div class="hint" id="hint">Держите — занос углубляется, отпустите — выровняется</div>
 <div class="overlay" id="start">
   <h1>Занос</h1>
-  <div class="sub">Машина едет сама. Держите палец на левой или правой половине экрана, чтобы пустить её в занос, отпустите — выровняется. Очки — за угол и длину заноса. Вылет с трассы — конец заезда.</div>
+  <div class="sub">Машина едет сама. Держите палец на левой или правой половине экрана: чем дольше держите, тем глубже занос; отпустите — выровняется. Очки — за угол и длину заноса. Вылет с трассы — конец заезда.</div>
   <button type="button" id="go">Поехали</button>
 </div>
 <div class="overlay" id="over" hidden>
@@ -76,9 +76,16 @@
   window.addEventListener('resize', resize); resize();
 
   // ── трасса: замкнутая извилистая кривая, повороты в обе стороны ──────────
+  // Трасса — деформированное кольцо r(θ) = 560 + Σ A·sin(kθ+φ), k = 2, 3, 5:
+  // такая кривая не самопересекается, а разные гармоники дают повороты
+  // разного радиуса — от шпилек (~95 px) до широких дуг и почти прямых.
+  // Точки подобраны перебором с проверкой зазора между ветками (≥ 280 px)
+  // и минимального радиуса; старт — в точке 0 (восток), движение по часовой.
   const CTRL = [
-    [300, 900], [420, 560], [760, 420], [1120, 520], [1300, 820], [1160, 1120],
-    [1380, 1380], [1200, 1620], [860, 1560], [640, 1300], [420, 1520], [220, 1300],
+    [1492, 850], [1480, 1035], [1318, 1151], [1169, 1218], [1065, 1321], [927, 1388],
+    [780, 1336], [656, 1275], [474, 1284], [256, 1232], [184, 1046], [281, 850],
+    [367, 708], [395, 558], [488, 432], [646, 404], [783, 386], [930, 296],
+    [1117, 265], [1243, 397], [1282, 572], [1367, 698],
   ];
   const TRACK_W = 118;                 // ширина полотна
   function catmull(pts, seg) {
@@ -96,7 +103,7 @@
     }
     return out;
   }
-  const PATH = catmull(CTRL, 40);
+  const PATH = catmull(CTRL, 24);
   const N = PATH.length;
   // сетка для быстрого поиска ближайшей точки трассы
   const CELL = 120;
@@ -176,11 +183,12 @@
   const car = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0 };
   const P = {
     accel: 260, maxSpeed: 330, drag: 0.35,
-    gripNormal: 7.5, gripDrift: 2.0,
-    turnNormal: 1.7, turnDrift: 2.6,
+    gripNormal: 7.5, gripDrift: 1.3,
+    turnNormal: 1.6, turnDrift: 3.0,
     minDriftSpeed: 100, slipMin: 0.2,
   };
   let steer = 0;               // -1 влево, 1 вправо, 0 отпущено
+  let hold = 0;                // сколько секунд палец держится: чем дольше, тем глубже занос
   let running = false, score = 0, combo = 1, comboTimer = 0, driftRun = 0, bestDrift = 0, laps = 0, lastIdx = 0;
   let best = 0;
   try { best = +localStorage.getItem('drift.best') || 0; } catch (e) {}
@@ -209,14 +217,18 @@
     let vf = car.vx * f[0] + car.vy * f[1];
     let vl = car.vx * r[0] + car.vy * r[1];
     const drifting = steer !== 0 && car.speed > P.minDriftSpeed;
+    hold = steer ? hold + dt : 0;
+    // глубина заноса нарастает с удержанием: в первые полсекунды это мягкий
+    // поворот, к полутора секундам — полноценный занос с малым сцеплением
+    const depth = Math.min(1, hold / 1.4);
 
     vf += P.accel * dt * (1 - Math.max(0, vf) / P.maxSpeed);
-    vf *= Math.exp(-P.drag * dt * (drifting ? 1.6 : 1));
-    const grip = drifting ? P.gripDrift : P.gripNormal;
+    vf *= Math.exp(-P.drag * dt * (drifting ? 1 + 0.8 * depth : 1));
+    const grip = drifting ? P.gripNormal + (P.gripDrift - P.gripNormal) * depth : P.gripNormal;
     vl *= Math.exp(-grip * dt);
 
     const speedFactor = Math.min(1, car.speed / 180);
-    const turn = drifting ? P.turnDrift : P.turnNormal;
+    const turn = drifting ? P.turnNormal + (P.turnDrift - P.turnNormal) * depth : P.turnNormal;
     car.a += steer * turn * speedFactor * dt;
     if (!drifting && Math.abs(car.slip) > 0.05) {
       // самовыравнивание после заноса: корпус доворачивается к направлению движения
@@ -295,13 +307,27 @@
     }
     // машина
     ctx.translate(car.x, car.y); ctx.rotate(car.a);
-    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(-19, -9, 38, 20);           // тень
-    ctx.fillStyle = '#111'; [[-13, -11], [-13, 6], [8, -11], [8, 6]].forEach(([x, y]) => ctx.fillRect(x, y, 8, 5)); // колёса
-    ctx.fillStyle = '#ffb000'; ctx.beginPath(); ctx.roundRect(-18, -8, 36, 16, 4); ctx.fill();   // кузов
-    ctx.fillStyle = '#1b1b1b'; ctx.fillRect(-4, -6, 11, 12);                       // кабина
-    ctx.fillStyle = '#ffe9a8'; ctx.fillRect(16, -6, 3, 4); ctx.fillRect(16, 2, 3, 4);  // фары
-    ctx.fillStyle = steer ? '#ff4b3e' : '#8a2a22'; ctx.fillRect(-19, -6, 2, 4); ctx.fillRect(-19, 2, 2, 4); // стопы
+    drawCar(ctx);
     ctx.restore();
+  }
+
+  // AE86 Trueno в «панде»: белый верх, чёрный низ по бортам и бамперам,
+  // выдвижные фары, чёрные стёкла. Нос — вправо (по оси X), 40×18.
+  function drawCar(c) {
+    c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(-21, -10, 42, 22);                           // тень
+    c.fillStyle = '#111';
+    [[-15, -12], [-15, 7], [9, -12], [9, 7]].forEach(([x, y]) => c.fillRect(x, y, 8, 5));       // колёса
+    c.fillStyle = '#151515'; c.beginPath(); c.roundRect(-20, -9, 40, 18, 3); c.fill();          // чёрный низ
+    c.fillStyle = '#f4f4f0'; c.beginPath(); c.roundRect(-19, -6.5, 38, 13, 2.5); c.fill();      // белый верх
+    c.fillStyle = '#f4f4f0'; c.fillRect(6, -8.5, 12, 17);                                       // белый капот до крыльев
+    c.fillStyle = '#151515'; c.fillRect(18, -9, 2.5, 18);                                       // передний бампер
+    c.fillStyle = '#1a1a1a'; c.fillRect(-5, -6, 10, 12);                                        // крыша и стёкла
+    c.fillStyle = '#f4f4f0'; c.fillRect(-3, -4, 6, 8);                                          // крыша (светлая)
+    c.fillStyle = '#1a1a1a'; c.fillRect(-13, -6.5, 8, 13);                                      // заднее стекло
+    c.fillStyle = steer ? '#ffe9a8' : '#2a2a2a';                                                // выдвижные фары
+    c.fillRect(13, -8, 5, 4); c.fillRect(13, 4, 5, 4);
+    c.fillStyle = steer ? '#ff4b3e' : '#7a1f18'; c.fillRect(-20, -7, 2, 4); c.fillRect(-20, 3, 2, 4); // стопы
+    c.fillStyle = '#9a9a9a'; c.fillRect(-21, -2, 2, 4);                                          // глушитель
   }
 
   let last = 0, frames = 0;
