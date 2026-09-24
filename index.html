@@ -671,15 +671,22 @@
     // desirefxme_010_wire_204204204_0. Поэтому сверяем по очищенному префиксу.
     const clean = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
     const wheels = [];
+    root.updateMatrixWorld(true);
     for (const k of cfg.wheels) {
       let n = named[k];
       if (!n) { const kk = clean(k); const alt = keys.find(x => { const c = clean(x); return c === kk || c.startsWith(kk + '_'); }); if (alt) n = named[alt]; }
       if (!n) continue;
-      const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
-      n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
-      // передние — по положению вдоль оси движения после поворота
-      const wp = new THREE.Vector3(); n.getWorldPosition(wp);
-      wheels.push({ node: n, pivot, front: null, wp });
+      // Центр вращения — середина самой геометрии, а не начало координат узла:
+      // у Passat все узлы колёс стоят в нуле модели, и колесо, повёрнутое вокруг
+      // своего origin, ходило бы по орбите вокруг центра машины.
+      const wp = new THREE.Box3().setFromObject(n).getCenter(new THREE.Vector3());
+      const local = n.parent.worldToLocal(wp.clone());
+      const pivot = new THREE.Group();                        // поворот руля, вокруг Y
+      const spin = new THREE.Group();                         // вращение колеса, вокруг своей оси
+      pivot.position.copy(local);
+      n.parent.add(pivot); pivot.add(spin); spin.add(n);
+      n.position.sub(local);                                  // узел остаётся там же, где был
+      wheels.push({ spin, pivot, front: null, wp });
     }
     if (wheels.length) {
       const xs = wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -777,13 +784,13 @@
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.node.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.node.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
