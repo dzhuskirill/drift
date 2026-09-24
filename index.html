@@ -70,6 +70,8 @@
   <div class="sub" style="font-size:13px">Машина едет сама. Держите палец на левой или правой половине экрана: чем дольше держите, тем глубже занос; отпустите — выровняется. Очки — за угол и длину заноса. Вылет с трассы — конец заезда.</div>
   <button type="button" id="go">Поехали</button>
   <div class="opts cars" id="modes"><button type="button" data-mode="train">Тренировка</button><button type="button" data-mode="race">Гонка</button></div>
+  <div class="opts cars" id="diffs"><button type="button" data-diff="novice">Новичок</button><button type="button" data-diff="amateur">Любитель</button><button type="button" data-diff="pro">Профессионал</button></div>
+  <div class="sub" style="font-size:12px;margin-top:-2px">уровень соперников в гонке</div>
   <div class="opts cars" id="tracks"></div>
   <div class="opts cars" id="cars">
     <button type="button" data-car="ae86">AE86 Trueno</button>
@@ -188,6 +190,24 @@
   let mode = 'train', raceT = 0, countdown = 0, finished = false, place = 0;
   try { mode = localStorage.getItem('drift.mode') || 'train'; } catch (e) {} if (!['train', 'race'].includes(mode)) mode = 'train';
   const qm = new URLSearchParams(location.search).get('mode'); if (qm === 'race' || qm === 'train') mode = qm;
+  // Уровни сложности правят только соперников — физика машины игрока одна на всех.
+  // look   — на сколько пикселей вперёд целится автопилот: меньше — точнее по дуге;
+  // thr    — порог доворота руля: меньше — аккуратнее держит линию;
+  // maxK   — доля максимальной скорости;
+  // brake  — насколько соперник сбрасывает скорость перед поворотом (0 — не сбрасывает вовсе).
+  // Шаги *Step разводят трёх соперников по силе, чтобы гонка не шла паровозом.
+  // Значения подобраны прогонами всех пяти трасс. Потолок скорости — главный
+  // рычаг, поэтому у профи он лишь чуть выше игрокового: обогнать его можно
+  // траекторией. Торможение окупается только на шпильках Ирохадзаки, где без
+  // него соперник вылетает, — отсюда небольшие 0.12 и 0.18.
+  const DIFFS = {
+    novice:  { name: 'Новичок',      look: 50, lookStep: 12, thr: 0.09, thrStep: 0.030, maxK: 0.90, maxKStep: 0.035, brake: 0 },
+    amateur: { name: 'Любитель',     look: 55, lookStep: 10, thr: 0.06, thrStep: 0.020, maxK: 0.97, maxKStep: 0.025, brake: 0.12 },
+    pro:     { name: 'Профессионал', look: 60, lookStep:  8, thr: 0.04, thrStep: 0.012, maxK: 1.05, maxKStep: 0.020, brake: 0.18 },
+  };
+  let diff = 'novice';
+  try { diff = localStorage.getItem('drift.diff') || 'novice'; } catch (e) {} if (!DIFFS[diff]) diff = 'novice';
+  const qd = new URLSearchParams(location.search).get('diff'); if (DIFFS[qd]) diff = qd;
   const bots = [];
   let best = 0;
   try { best = +localStorage.getItem('drift.best') || 0; } catch (e) {}
@@ -208,11 +228,15 @@
     score = 0; combo = 1; comboTimer = 0; driftRun = 0; series = 0; bestDrift = 0;
     raceT = 0; countdown = race ? 3 : 0; finished = false; place = 0;
     for (const b of bots) scene.remove(b.mesh); bots.length = 0;
+    const D = DIFFS[diff];
     if (race) for (let i = 0; i < 3; i++) {
       const b = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0, w: 0, depth: 0, hold: 0, steer: 0,
-        look: 50 + i * 12, thr: 0.09 + i * 0.03, maxK: 0.9 + i * 0.035, mesh: botMesh(i), prog: 0 };
+        look: D.look + i * D.lookStep, thr: D.thr + i * D.thrStep,
+        maxK: D.maxK + i * D.maxKStep, maxKBase: D.maxK + i * D.maxKStep, brake: D.brake,
+        mesh: botMesh(i), wheels: [], carId: null, prog: 0 };
       placeCar(b, i === 0 ? 8 : 0, i === 0 ? -22 : (i === 1 ? 22 : -22), 0);
       bots.push(b); scene.add(b.mesh);
+      dressBot(b, i);
     }
     mc.clearRect(0, 0, WORLD, WORLD); marksDirty = true;
     $('pos').hidden = !race && CLOSED;
@@ -278,11 +302,25 @@
     return da > thr ? 1 : da < -thr ? -1 : 0;
   }
   function botSteer(b) { return pilot(b, b.look, b.thr); }
+  // Кривизна оси впереди: угол между двумя её отрезками, взятыми с шагом, который
+  // растёт со скоростью. 0 — прямая, 1 — шпилька. Отсюда опытный соперник узнаёт,
+  // что пора придержать газ: новичок этого не делает и вылетает в поворотах.
+  function bendAhead(i, speed) {
+    const stepPx = TRACK.len / N;
+    const step = Math.max(4, Math.round((70 + speed * 0.55) / stepPx));
+    const at = k => PATH[CLOSED ? ((k % N) + N) % N : Math.max(0, Math.min(N - 1, k))];
+    const a = at(i), b = at(i + step), c = at(i + 2 * step);
+    let d = Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(b[1] - a[1], b[0] - a[0]);
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    return Math.min(1, Math.abs(d));
+  }
   function progressOf(c, nrI) { return (CLOSED ? c.laps * N : 0) + nrI; }
   function raceGoal() { return CLOSED ? TRACK.laps * N : N - 3; }
   function stepBots(dt) {
     for (const b of bots) {
       if (b.finished) continue;
+      // индекс с прошлого кадра — своего поиска ближайшей точки здесь не нужно
+      b.maxK = b.maxKBase * (1 - b.brake * bendAhead(b.lastIdx, b.speed));
       b.steer = botSteer(b);
       physics(b, b.steer, dt);
       const nr = nearest(b.x, b.y);
@@ -361,7 +399,7 @@
     if (mode === 'race') {
       $('recLabel').textContent = place === 1 ? 'Победа!' : 'Финиш';
       $('finalScore').textContent = place + '-е место';
-      $('finalSub').textContent = `время ${mm}:${ss} · очки за занос ${total} · самый длинный занос ${bestDrift.toFixed(1)} с`;
+      $('finalSub').textContent = `${DIFFS[diff].name} · время ${mm}:${ss} · очки за занос ${total} · самый длинный занос ${bestDrift.toFixed(1)} с`;
     } else {
       $('recLabel').textContent = 'Финиш';
       $('finalScore').textContent = total;
@@ -539,6 +577,8 @@
   })();
   scene.add(carMesh);
   const BOT_COLORS = [0xffd23f, 0x2e86de, 0xe74c3c];
+  // Запасной соперник из кубиков: едет, пока грузится его модель, и остаётся,
+  // если файл не пришёл.
   function botMesh(i) {
     const base = carParts.body.material;
     const paint = new THREE.MeshStandardMaterial({ color: BOT_COLORS[i % BOT_COLORS.length], roughness: 0.35, metalness: 0.15 });
@@ -546,54 +586,122 @@
     m.traverse(o => { if (o.isMesh && o.material === base) o.material = paint; });
     return m;
   }
+  // Соперникам — те же настоящие модели, что и игроку, по кругу от его машины.
+  // Моделей три, машин в гонке четыре, поэтому третий соперник неизбежно берёт
+  // машину игрока — но в своём цвете, так что путаницы на трассе нет.
+  function botCarId(i) {
+    const ids = Object.keys(CARS), k = ids.indexOf(carId);
+    return ids[(k + 1 + i) % ids.length];
+  }
+  // Меш подменяется на ходу: заезд уже идёт, машина просто перестаёт быть рубленой.
+  function dressBot(b, i) {
+    const id = botCarId(i);
+    withModel(id, () => {
+      if (!bots.includes(b)) return;                                  // заезд успели перезапустить
+      const m = prepareModel(id, BOT_COLORS[i % BOT_COLORS.length]);
+      scene.remove(b.mesh);
+      b.mesh = m.holder; b.wheels = m.wheels; b.carId = id;
+      b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a;
+      scene.add(b.mesh);
+    });
+  }
 
   // Машины: glTF-модели, у каждой — своя ориентация носа и способ найти колёса.
   // Пока грузится — едет блочная AE86; при ошибке загрузки остаётся она.
+  // body — имя материала кузова: по нему соперника красят в его цвет.
   const CARS = {
     ae86:   { file: 'ae86.glb',   name: 'Toyota AE86 Trueno', rotY: Math.PI / 2, axis: 'z', wheels: ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel'], wheelAxis: 'x',
+              body: 'Primary',
               paint: m => { if (m.name === 'Windows') { m.transparent = true; m.opacity = 0.8; }
                             if (m.name === 'Primary') { m.color.set(0xf4f4ef); m.map = null; m.roughness = 0.35; m.metalness = 0.15; m.needsUpdate = true; }
                             if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
-    rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x' },
-    passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z',
+    rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x',
+              body: 'RRRX7_Body' },
+    passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
+
+  // Один файл грузится один раз на всех: игрок и соперники берут клоны шаблона.
+  const modelCache = {}, modelWaiters = {};
+  function withModel(id, cb) {
+    const cfg = CARS[id]; if (!cfg || !THREE.GLTFLoader) return;
+    if (modelCache[id]) { cb(); return; }
+    (modelWaiters[id] = modelWaiters[id] || []).push(cb);
+    if (modelWaiters[id].length > 1) return;                          // загрузка уже идёт
+    new THREE.GLTFLoader().load(cfg.file, g => {
+      modelCache[id] = g.scene;
+      const queue = modelWaiters[id]; modelWaiters[id] = [];
+      for (const f of queue) f();
+    }, undefined, err => { modelWaiters[id] = []; console.warn('model not loaded, using blocks', err); });
+  }
+
+  // Клон шаблона приводится к игровым размерам (длина 52, нос вдоль +X, колёса
+  // на земле), колёса вынимаются в поворотные pivot-ы. colour !== null — красим
+  // кузов в цвет соперника.
+  function prepareModel(id, colour) {
+    const cfg = CARS[id];
+    const root = modelCache[id].clone(true);
+    const box = new THREE.Box3().setFromObject(root);
+    const len = cfg.axis === 'z' ? box.max.z - box.min.z : box.max.x - box.min.x, sc = 52 / len;
+    root.scale.setScalar(sc); root.rotation.y = cfg.rotY;
+    const c = box.getCenter(new THREE.Vector3());
+    root.position.set(0, -box.min.y * sc, 0);
+    // центр модели — в начало координат по горизонтали (после поворота)
+    const off = new THREE.Vector3(-c.x * sc, 0, -c.z * sc).applyAxisAngle(new THREE.Vector3(0, 1, 0), cfg.rotY);
+    root.position.add(off);
+    // clone() делит материалы по ссылке — без своей копии перекраска соперника
+    // перекрасила бы и машину игрока. Копия одна на исходный материал.
+    const mine = new Map();
+    root.traverse(o => {
+      if (!o.isMesh || !o.material) return;
+      o.castShadow = true; o.receiveShadow = false;
+      let m = mine.get(o.material);
+      if (!m) {
+        m = o.material.clone();
+        if (cfg.paint) cfg.paint(m);
+        if (colour != null && m.name === cfg.body) { m.color.set(colour); m.map = null; m.needsUpdate = true; }
+        mine.set(o.material, m);
+      }
+      o.material = m;
+    });
+    const named = {}; root.traverse(o => { named[o.name] = o; });
+    const keys = Object.keys(named);
+    // GLTFLoader чистит имена узлов (точки выбрасывает), а у Passat к имени
+    // приклеен хвост материала: desirefx.me_010 в файле становится
+    // desirefxme_010_wire_204204204_0. Поэтому сверяем по очищенному префиксу.
+    const clean = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+    const wheels = [];
+    for (const k of cfg.wheels) {
+      let n = named[k];
+      if (!n) { const kk = clean(k); const alt = keys.find(x => { const c = clean(x); return c === kk || c.startsWith(kk + '_'); }); if (alt) n = named[alt]; }
+      if (!n) continue;
+      const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
+      n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
+      // передние — по положению вдоль оси движения после поворота
+      const wp = new THREE.Vector3(); n.getWorldPosition(wp);
+      wheels.push({ node: n, pivot, front: null, wp });
+    }
+    if (wheels.length) {
+      const xs = wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+      wheels.forEach(w => { w.front = w.wp.x > mid; });
+    }
+    const holder = new THREE.Group(); holder.add(root);
+    return { holder, wheels };
+  }
   let carId = 'ae86';
   try { carId = localStorage.getItem('drift.car') || 'ae86'; if (!CARS[carId]) carId = 'ae86'; } catch (e) {}
   const gltfCar = { root: null, wheels: [], lamps: null, id: null };
   function loadCar(id) {
-    const cfg = CARS[id]; if (!cfg || !THREE.GLTFLoader) return;
+    if (!CARS[id] || !THREE.GLTFLoader) return;
     if (gltfCar.root) { scene.remove(gltfCar.root); gltfCar.root = null; gltfCar.wheels = []; carMesh.visible = true; }
     gltfCar.id = id;
-    new THREE.GLTFLoader().load(cfg.file, g => {
+    withModel(id, () => {
       if (gltfCar.id !== id) return;                                  // пока грузилась, выбрали другую
-      const root = g.scene;
-      const box = new THREE.Box3().setFromObject(root);
-      const len = cfg.axis === 'z' ? box.max.z - box.min.z : box.max.x - box.min.x, sc = 52 / len;
-      root.scale.setScalar(sc); root.rotation.y = cfg.rotY;
-      const c = box.getCenter(new THREE.Vector3());
-      root.position.set(0, -box.min.y * sc, 0);
-      // центр модели — в начало координат по горизонтали (после поворота)
-      const off = new THREE.Vector3(-c.x * sc, 0, -c.z * sc).applyAxisAngle(new THREE.Vector3(0, 1, 0), cfg.rotY);
-      root.position.add(off);
-      root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; if (o.material && cfg.paint) cfg.paint(o.material); } });
-      const named = {}; root.traverse(o => { named[o.name] = o; });
-      for (const k of cfg.wheels) {
-        const n = named[k]; if (!n) continue;
-        const pivot = new THREE.Group(); pivot.position.copy(n.position); pivot.quaternion.copy(n.quaternion);
-        n.parent.add(pivot); pivot.add(n); n.position.set(0, 0, 0); n.quaternion.identity();
-        // передние — по положению вдоль оси движения после поворота
-        const wp = new THREE.Vector3(); n.getWorldPosition(wp);
-        gltfCar.wheels.push({ node: n, pivot, front: null, wp });
-      }
-      if (gltfCar.wheels.length) {
-        const xs = gltfCar.wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
-        gltfCar.wheels.forEach(w => { w.front = w.wp.x > mid; });
-      }
+      const m = prepareModel(id, null);
       carMesh.visible = false;
-      const holder = new THREE.Group(); holder.add(root); scene.add(holder);
-      gltfCar.root = holder;
-    }, undefined, err => console.warn('model not loaded, using blocks', err));
+      scene.add(m.holder);
+      gltfCar.root = m.holder; gltfCar.wheels = m.wheels;
+    });
   }
   const qc = new URLSearchParams(location.search).get('car'); if (qc && CARS[qc]) carId = qc;
   loadCar(carId);
@@ -606,7 +714,9 @@
   for (const id in TRACKS) { const b = document.createElement('button'); b.type = 'button'; b.dataset.track = id; b.textContent = TRACKS[id].name; b.addEventListener('click', () => { setTrack(id); reset(); }); $('tracks').appendChild(b); }
   function setMode(m) { mode = m; try { localStorage.setItem('drift.mode', m); } catch (e) {} for (const b of $('modes').children) b.classList.toggle('on', b.dataset.mode === m); }
   for (const b of $('modes').children) b.addEventListener('click', () => { setMode(b.dataset.mode); reset(); });
-  setMode(mode); setTrack(trackId);
+  function setDiff(d) { diff = d; try { localStorage.setItem('drift.diff', d); } catch (e) {} for (const b of $('diffs').children) b.classList.toggle('on', b.dataset.diff === d); }
+  for (const b of $('diffs').children) b.addEventListener('click', () => { setDiff(b.dataset.diff); reset(); });
+  setMode(mode); setTrack(trackId); setDiff(diff);
 
   // дым — спрайты
   const smokeTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
@@ -669,7 +779,12 @@
       const ax = CARS[gltfCar.id].wheelAxis;
       for (const w of gltfCar.wheels) { w.node.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
-    for (const b of bots) { b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06; }
+    for (const b of bots) {
+      b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
+      if (!b.wheels.length) continue;
+      const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
+      for (const w of b.wheels) { w.node.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+    }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
     // передние колёса поворачиваются, все крутятся по скорости
@@ -854,7 +969,7 @@
       if (i % (mode_ === 'hold' ? 15 : 60) === 0) log.push(`${t.toFixed(0)}s v${car.speed | 0} slip${(car.slip * 57.3) | 0} d${nearest(car.x, car.y).d | 0} sc${score | 0}`);
     }
     $('start').hidden = true; draw(1 / 60);
-    document.title = (running ? 'ALIVE ' : finished ? 'FINISH@' + t.toFixed(1) + 's place' + place + ' bots' + bots.map(b => (b.finished ? 'F' : '') + (b.prog | 0)).join('/') + ' ' : 'CRASH@' + t.toFixed(1) + 's ') + 'track' + trackId + ' laps' + laps + ' best' + bestDrift.toFixed(1) + ' | ' + log.join(' | ');
+    document.title = (running ? 'ALIVE ' : finished ? 'FINISH@' + t.toFixed(1) + 's place' + place + ' bots' + bots.map(b => (b.finished ? 'F' : '') + (b.prog | 0)).join('/') + ' ' : 'CRASH@' + t.toFixed(1) + 's ') + 'track' + trackId + ' diff' + diff + ' bots' + bots.map(b => (b.carId || 'blocks')).join(',') + ' laps' + laps + ' best' + bestDrift.toFixed(1) + ' | ' + log.join(' | ');
   }
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
