@@ -63,6 +63,13 @@
   /* общее правило canvas выше задаёт display:block и перебивает атрибут
      hidden — без этой строки карта висела бы на экране всегда */
   #map[hidden] { display: none; }
+  /* ошибка не должна оставлять игрока перед молчаливым экраном: показываем
+     текст прямо на странице, иначе о сбое узнаёшь только по жалобе */
+  #err { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 50;
+         background: rgba(140,20,15,.94); color: #fff; font-size: 12px;
+         padding: 10px 12px; border-radius: 10px; line-height: 1.35;
+         font-family: ui-monospace, Menlo, Consolas, monospace; }
+  #err[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -75,6 +82,7 @@
 <div class="pos" id="pos" hidden></div>
 <button type="button" class="cam" id="camBtn" aria-label="Сменить вид">вид: сверху</button>
 <canvas id="map" width="208" height="208" hidden></canvas>
+<div id="err" hidden></div>
 <div class="hint" id="hint">Держите — занос углубляется, отпустите — выровняется</div>
 <div class="overlay" id="start">
   <h1>Занос</h1>
@@ -118,6 +126,15 @@
 <script src="GLTFLoader.js"></script>
 <script src="tracks.js"></script>
 <script>
+// Перехватчик ставится до основного кода: если упадёт инициализация, игрок
+// увидит причину, а не пустой экран.
+window.addEventListener('error', function (e) {
+  var box = document.getElementById('err');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = 'Сбой: ' + (e.message || e.type) +
+    (e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : '');
+});
 (function () {
   'use strict';
   const canvas = document.getElementById('c');
@@ -746,14 +763,16 @@
   // Меш подменяется на ходу: заезд уже идёт, машина просто перестаёт быть рубленой.
   function dressBot(b, i) {
     const id = botCarId(i);
-    withModel(id, () => {
+    // с задержкой по номеру: четыре модели разом — это около 10 МБ в одном
+    // окне, и на мобильной сети страница перестаёт отзываться
+    setTimeout(() => withModel(id, () => {
       if (!bots.includes(b)) return;                                  // заезд успели перезапустить
       const m = prepareModel(id, BOT_COLORS[i % BOT_COLORS.length]);
       scene.remove(b.mesh);
       b.mesh = m.holder; b.wheels = m.wheels; b.carId = id;
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a;
       scene.add(b.mesh);
-    });
+    }), 400 + i * 1200);
   }
 
   // Машины: glTF-модели, у каждой — своя ориентация носа и способ найти колёса.
