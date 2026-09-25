@@ -223,9 +223,9 @@ window.addEventListener('error', function (e) {
     // ниже, рабочий угол шире, доворот резче — машину охотнее срывает и
     // дольше несёт боком. Порог скорости снижен, чтобы занос был доступен
     // и в медленных связках.
-    gripNormal: 6.5, gripDrift: 0.42, gripCatch: 9,
-    turnNormal: 1.7, turnDrift: 3.0,
-    minDriftSpeed: 82, slipMin: 0.2, slipHold: 0.80,
+    gripNormal: 6.5, gripDrift: 0.26, gripCatch: 9,
+    turnNormal: 1.7, turnDrift: 3.4,
+    minDriftSpeed: 70, slipMin: 0.2, slipHold: 0.95,
   };
   let steer = 0;               // -1 влево, 1 вправо, 0 отпущено
   let hold = 0;                // сколько секунд палец держится: чем дольше, тем глубже занос
@@ -801,6 +801,9 @@ window.addEventListener('error', function (e) {
               wheels: ['Object_19', 'Object_24', 'Object_27', 'Object_30',
                        'Object_20', 'Object_25', 'Object_28', 'Object_31'],
               body: 'Material', drop: ['Object_22'],
+              // руль вращает колесо вокруг вертикали, а у этой модели вертикаль —
+              // локальная ось X, направленная вниз (отсюда обратный знак)
+              steerAxis: 'x', steerSign: -1,
               // В модели кузов задан как чистый металл (metalness 1). Без карты
               // окружения такой материал отражать нечего, и машина выглядит
               // почти чёрной. Поэтому красим кузов в белый и переводим все
@@ -998,13 +1001,21 @@ window.addEventListener('error', function (e) {
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      const sax = CARS[gltfCar.id].steerAxis || 'y', ssign = CARS[gltfCar.id].steerSign || 1;
+      for (const w of gltfCar.wheels) {
+        w.spin.rotation[ax] -= spin;
+        if (w.front) w.pivot.rotation[sax] += ((-steer * 0.35 * ssign) - w.pivot.rotation[sax]) * Math.min(1, 10 * dt);
+      }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      const bsax = CARS[b.carId].steerAxis || 'y', bssign = CARS[b.carId].steerSign || 1;
+      for (const w of b.wheels) {
+        w.spin.rotation[bax] -= bspin;
+        if (w.front) w.pivot.rotation[bsax] += ((-b.steer * 0.35 * bssign) - w.pivot.rotation[bsax]) * Math.min(1, 10 * dt);
+      }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
