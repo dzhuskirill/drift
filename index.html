@@ -822,12 +822,13 @@ window.addEventListener('error', function (e) {
               paint: m => { if (m.name === 'chrome') { m.color.set(0x1d1d1f); m.metalness = 0.35; m.roughness = 0.45; m.needsUpdate = true; } },
               // накладки арок в модели шире кузова и торчат наружу — поджимаем
               // их к центру по поперечной оси
-              tuck: { nodes: ['arch', 'arch.001', 'arch.002', 'arch.003'], amount: 1.6 },
+              tuck: { nodes: ['arch', 'arch.001', 'arch.002', 'arch.003'], amount: 0.7 },
               // Решётку отдельно покрасить нельзя: в модели она не выделена в
               // самостоятельный узел, а входит в общий меш кузова. Подсветка
               // узлов (?probe=1) это подтвердила — отдельными деталями спереди
               // идут только эмблема и уплотнители.
-              probe: { 'desirefx.me_006': 0xff0000, 'desirefx.me_002': 0x00ff00, 'desirefx.me_005': 0x0000ff, 'desirefx.me_001': 0xffff00 },
+              probe: { 'arch': 0xff0000, 'arch.001': 0x00ff00, 'arch.002': 0x0000ff, 'arch.003': 0xffff00,
+               'skirt': 0xff00ff, 'skirt.001': 0x00ffff },
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
 
