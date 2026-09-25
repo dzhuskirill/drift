@@ -807,7 +807,19 @@ window.addEventListener('error', function (e) {
       modelCache[id] = g.scene;
       const queue = modelWaiters[id]; modelWaiters[id] = [];
       for (const f of queue) f();
-    }, undefined, err => { modelWaiters[id] = []; console.warn('model not loaded, using blocks', err); });
+    }, undefined, err => {
+      modelWaiters[id] = [];
+      // молчаливый провал загрузки выглядит как «машина осталась квадратной»,
+      // и понять причину со стороны невозможно — поэтому показываем её
+      const box = document.getElementById('err');
+      if (box) {
+        box.hidden = false;
+        box.textContent = 'Модель ' + cfg.file + ' не загрузилась: ' +
+          ((err && (err.message || err.type)) || 'неизвестная ошибка') +
+          '. Едет блочная машина.';
+      }
+      console.warn('model not loaded, using blocks', err);
+    });
   }
 
   // Закрутка геометрии колеса вокруг его оси. У моделей, где левый борт
@@ -822,18 +834,21 @@ window.addEventListener('error', function (e) {
     node.traverse(o => {
       const pos = o.isMesh && o.geometry && o.geometry.attributes.position;
       if (!pos) return;
+      // getX/getY/getZ есть и у обычного атрибута, и у чередующегося, а вот
+      // getComponent — не у всех: обращение к нему роняло загрузку моделей
       const n = pos.count, step = Math.max(1, Math.floor(n / 300));   // хватает выборки
+      const at = (i, k) => (k === 0 ? pos.getX(i) : k === 1 ? pos.getY(i) : pos.getZ(i));
       let ca = 0, cb = 0, cc = 0, m = 0;
       for (let i = 0; i < n; i += step) {
-        ca += pos.getComponent(i, ai); cb += pos.getComponent(i, bi); cc += pos.getComponent(i, ci); m++;
+        ca += at(i, ai); cb += at(i, bi); cc += at(i, ci); m++;
       }
       if (!m) return;
       ca /= m; cb /= m; cc /= m;
       for (let i = 0; i < n; i += step) {
-        const b = pos.getComponent(i, bi) - cb, c = pos.getComponent(i, ci) - cc;
+        const b = at(i, bi) - cb, c = at(i, ci) - cc;
         const r = Math.hypot(b, c);
         if (r < 1e-6) continue;
-        sum += (pos.getComponent(i, ai) - ca) * (b / r);
+        sum += (at(i, ai) - ca) * (b / r);
         count++;
       }
     });
@@ -1001,13 +1016,13 @@ window.addEventListener('error', function (e) {
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin * w.sign; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin * w.sign; if (w.front) w.pivot.rotation.y += ((steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin * w.sign; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin * w.sign; if (w.front) w.pivot.rotation.y += ((b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
