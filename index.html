@@ -786,7 +786,10 @@ window.addEventListener('error', function (e) {
                             if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
     rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x',
               body: 'RRRX7_Body' },
-    rx7fc:  { file: 'rx7fc.glb',  name: 'Mazda RX-7 FC', rotY: Math.PI / 2, axis: 'z', wheelAxis: 'x',
+    rx7fc:  { file: 'rx7fc.glb',  name: 'Mazda RX-7 FC', rotY: Math.PI / 2, axis: 'z', wheelAxis: 'y',
+              // ось вращения — Y: в мировых координатах модели колесо тонкое по X,
+              // но вращение идёт в системе родителя узла, а там ось симметрии Y
+              // (габариты самой геометрии — 2,15 × 0,20 × 2,15)
               // модель со Sketchfab: узлы безымянные, поэтому колёса и кузов найдены
               // разбором геометрии — диски и покрышки стоят по углам парами
               wheels: ['Object_19', 'Object_24', 'Object_27', 'Object_30',
