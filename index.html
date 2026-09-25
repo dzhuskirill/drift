@@ -980,7 +980,7 @@ window.addEventListener('error', function (e) {
       px = tx - fx * 8; py = 21; pz = tz - fz * 8;
       const lean = car.slip * 0.35;                      // взгляд чуть уходит в сторону заноса
       const la = car.a + lean;
-      lx = tx + Math.cos(la) * 120; ly = 12; lz = tz + Math.sin(la) * 120; k = 40;
+      lx = tx + Math.cos(la) * 120; ly = 12; lz = tz + Math.sin(la) * 120; k = 18;
       camera.up.set(0, 1, 0);
     }
     const a = camInit ? 1 - Math.exp(-k * dt) : 1;
@@ -1011,9 +1011,12 @@ window.addEventListener('error', function (e) {
     // передние колёса поворачиваются, все крутятся по скорости
     const spin = car.speed * dt / 4.3;
     carParts.wheels.forEach((g, i) => { g.rotation.y = i >= 2 ? -steer * 0.45 : 0; g.children.forEach(m => { m.rotation.y += spin; }); });
-    // из кабины: кузов над капотом не мешает обзору
+    // из кабины: кузов над капотом не мешает обзору. Для glTF-моделей скрытия
+    // не было вовсе — камера оказывалась внутри кузова, и по кадру мельтешили
+    // полигоны салона (особенно заметно на низкой RX-7 FC)
     const inside = view === 'cockpit';
     for (const n of ['wind', 'rear', 'spoiler']) carParts[n].visible = !inside;
+    if (gltfCar.root) gltfCar.root.visible = !inside;
     sun.position.set(car.x - 300, 500, car.y + 200); sun.target.position.set(car.x, 0, car.y);
     if (marksDirty && (markFrame++ % 3 === 0)) { marksTex.needsUpdate = true; marksDirty = false; }
     for (let i = 0; i < smokePool.length; i++) {
