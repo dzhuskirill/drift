@@ -53,6 +53,16 @@
   .zones { position: fixed; inset: 0; display: flex; pointer-events: none; }
   .zones div { flex: 1; }
   .zones div.on { background: radial-gradient(ellipse at 50% 100%, rgba(255,176,0,.10), transparent 70%); }
+  /* мини-карта: соперники часто оказываются позади камеры, и без карты их
+     просто не видно — особенно за поворотом */
+  #map { position: fixed; left: calc(10px + env(safe-area-inset-left, 0px));
+         bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+         width: 104px; height: 104px; border-radius: 12px;
+         background: rgba(12,14,17,.55); backdrop-filter: blur(2px);
+         pointer-events: none; z-index: 5; }
+  /* общее правило canvas выше задаёт display:block и перебивает атрибут
+     hidden — без этой строки карта висела бы на экране всегда */
+  #map[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -64,6 +74,7 @@
 </div>
 <div class="pos" id="pos" hidden></div>
 <button type="button" class="cam" id="camBtn" aria-label="Сменить вид">вид: сверху</button>
+<canvas id="map" width="208" height="208" hidden></canvas>
 <div class="hint" id="hint">Держите — занос углубляется, отпустите — выровняется</div>
 <div class="overlay" id="start">
   <h1>Занос</h1>
@@ -116,6 +127,7 @@
   // ── трасса: выбирается из tracks.js (кольцо или горные дороги точка-точка) ──
   const TRACK_W = 118;                 // ширина полотна
   let trackId = 'ring', TRACK = null, PATH = [], N = 0, CLOSED = true, WORLD = 1700;
+  let mapPath = null;                  // контур мини-карты: пересобирается при смене трассы
   try { trackId = localStorage.getItem('drift.track') || 'ring'; } catch (e) {} if (!TRACKS[trackId]) trackId = 'ring';
   const qt = new URLSearchParams(location.search).get('track'); if (qt && TRACKS[qt]) trackId = qt;
   // сетка для быстрого поиска ближайшей точки трассы
@@ -293,6 +305,10 @@
       const b = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0, w: 0, depth: 0, hold: 0, steer: 0,
         look: D.look + i * D.lookStep, thr: D.thr + i * D.thrStep,
         maxK: D.maxK + i * D.maxKStep, maxKBase: D.maxK + i * D.maxKStep, brake: D.brake,
+        // своя манера езды: смещение от осевой и готовность резать апекс.
+        // Без этого все трое идут гуськом по одной линии.
+        lane: LANES[i][0] + (Math.random() - 0.5) * 6,
+        apex: LANES[i][1] * (0.85 + Math.random() * 0.3),
         mesh: botMesh(i), wheels: [], carId: null, prog: 0, tf: botTf };
       placeCar(b, i === 0 ? 8 : 0, i === 0 ? -22 : (i === 1 ? 22 : -22), 0);
       bots.push(b); scene.add(b.mesh);
@@ -354,18 +370,39 @@
     return { f, r };
   }
   // автопилот соперника: целится в точку трассы впереди, держит палец, пока нос не смотрит туда
-  function pilot(c, base, thr) {
+  function pilot(c, base, thr, style) {
     // «чистое преследование»: цель — точка оси на расстоянии, растущем со скоростью;
     // слишком далёкая цель срезает шпильки, слишком близкая — раскачивает
     const nr = nearest(c.x, c.y);
     const stepPx = TRACK.len / N;
     const look = Math.round((base + c.speed * 0.32) / stepPx);
-    const tgt = PATH[CLOSED ? (nr.i + look) % N : Math.min(N - 1, nr.i + look)];
-    let da = Math.atan2(tgt[1] - c.y, tgt[0] - c.x) - c.a;
+    const ti = CLOSED ? (nr.i + look) % N : Math.min(N - 1, nr.i + look);
+    let tx = PATH[ti][0], ty = PATH[ti][1];
+    if (style && Number.isFinite(style.lane)) {
+      // цель сдвигается поперёк полотна: базовая линия плюс срезание апекса
+      const nx = PATH[(ti + 2) % N][0] - PATH[ti][0], ny = PATH[(ti + 2) % N][1] - PATH[ti][1];
+      const len = Math.hypot(nx, ny) || 1;
+      const bend = bendSigned(nr.i, c.speed);
+      const raw = style.lane - Math.sign(bend) * Math.min(1, Math.abs(bend) / 0.9) * style.apex * 16;
+      const lim = TRACK_W / 2 - 22;                 // оставляем запас до обочины
+      const off = Math.max(-lim, Math.min(lim, raw));
+      tx += -ny / len * off; ty += nx / len * off;
+    }
+    let da = Math.atan2(ty - c.y, tx - c.x) - c.a;
     da = Math.atan2(Math.sin(da), Math.cos(da));
     return da > thr ? 1 : da < -thr ? -1 : 0;
   }
-  function botSteer(b) { return pilot(b, b.look, b.thr); }
+  // Знаковая кривизна впереди: плюс — поворот влево, минус — вправо. Нужна,
+  // чтобы «режущий» соперник смещался к внутренней стороне дуги.
+  function bendSigned(i, speed) {
+    const stepPx = TRACK.len / N;
+    const step = Math.max(4, Math.round((70 + speed * 0.55) / stepPx));
+    const at = k => PATH[CLOSED ? ((k % N) + N) % N : Math.max(0, Math.min(N - 1, k))];
+    const a = at(i), b = at(i + step), c = at(i + 2 * step);
+    let d = Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(b[1] - a[1], b[0] - a[0]);
+    return Math.atan2(Math.sin(d), Math.cos(d));
+  }
+  function botSteer(b) { return pilot(b, b.look, b.thr, b); }
   // Кривизна оси впереди: угол между двумя её отрезками, взятыми с шагом, который
   // растёт со скоростью. 0 — прямая, 1 — шпилька. Отсюда опытный соперник узнаёт,
   // что пора придержать газ: новичок этого не делает и вылетает в поворотах.
@@ -377,6 +414,55 @@
     let d = Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(b[1] - a[1], b[0] - a[0]);
     d = Math.atan2(Math.sin(d), Math.cos(d));
     return Math.min(1, Math.abs(d));
+  }
+  // Столкновения. Раньше машины расталкивались одним кругом радиусом 20 при
+  // длине кузова 52 — они заметно въезжали друг в друга, прежде чем что-то
+  // происходило. Теперь на каждую приходится две окружности, передняя и
+  // задняя: форма ближе к кузову, а удар гасит сближение и разворачивает
+  // машины, как настоящий контакт.
+  const HIT_R = 13, HIT_OFF = 13;
+  function hitSpheres(c) {
+    const fx = Math.cos(c.a), fy = Math.sin(c.a);
+    return [[c.x + fx * HIT_OFF, c.y + fy * HIT_OFF], [c.x - fx * HIT_OFF, c.y - fy * HIT_OFF]];
+  }
+  function collide() {
+    const all = [car, ...bots];
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const A = all[i], B = all[j];
+      if (Math.hypot(B.x - A.x, B.y - A.y) > 60) continue;        // заведомо далеко
+      const sa = hitSpheres(A), sb = hitSpheres(B);
+      for (const p of sa) for (const q of sb) {
+        const dx = q[0] - p[0], dy = q[1] - p[1];
+        const d = Math.hypot(dx, dy) || 1e-3;
+        const overlap = HIT_R * 2 - d;
+        if (overlap <= 0) continue;
+        const nx = dx / d, ny = dy / d;
+        const push = overlap / 2;
+        A.x -= nx * push; A.y -= ny * push;
+        B.x += nx * push; B.y += ny * push;
+        // гасим сближение и добавляем отскок: удар должен чувствоваться
+        const rel = (B.vx - A.vx) * nx + (B.vy - A.vy) * ny;
+        if (rel < 0) {
+          // Удар гасит часть сближения. Доля намеренно небольшая: на узких
+          // горных трассах полный отскок выбивал машины с полотна, а поправить
+          // курс после толчка успевает не всякий. Верхние пределы — страховка
+          // от кувырка при лобовом на высокой скорости.
+          const imp = Math.max(-40, rel * 0.3);
+          A.vx += nx * imp; A.vy += ny * imp;
+          B.vx -= nx * imp; B.vy -= ny * imp;
+          // контакт не по центру подворачивает машину
+          const spinCap = 0.5;
+          const arm = (p[0] - A.x) * ny - (p[1] - A.y) * nx;
+          A.w += Math.max(-spinCap, Math.min(spinCap, arm * rel * 0.00004));
+          const armB = (q[0] - B.x) * ny - (q[1] - B.y) * nx;
+          B.w -= Math.max(-spinCap, Math.min(spinCap, armB * rel * 0.00004));
+          if (Math.abs(rel) > 60) {
+            puff((p[0] + q[0]) / 2, (p[1] + q[1]) / 2, 1);
+            if (navigator.vibrate && (A === car || B === car)) navigator.vibrate(30);
+          }
+        }
+      }
+    }
   }
   function progressOf(c, nrI) { return (CLOSED ? c.laps * N : 0) + nrI; }
   function raceGoal() { return CLOSED ? TRACK.laps * N : N - 3; }
@@ -393,12 +479,7 @@
       b.lastIdx = nr.i; b.lapsKeep = b.laps; b.prog = progressOf(b, nr.i);
       if (b.prog >= raceGoal()) { b.finished = true; b.time = raceT; }
     }
-    // машины не проезжают друг сквозь друга: мягкое расталкивание
-    const all = [car, ...bots];
-    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
-      const A = all[i], B = all[j], dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy) || 1;
-      if (d < 40) { const push = (40 - d) / 2, nx = dx / d, ny = dy / d; A.x -= nx * push; A.y -= ny * push; B.x += nx * push; B.y += ny * push; }
-    }
+    collide();
   }
   function step(dt) {
     if (countdown > 0) { countdown -= dt; $('pos').textContent = countdown > 0 ? String(Math.ceil(countdown)) : 'Старт!'; if (countdown > 0) return; }
@@ -643,6 +724,9 @@
   })();
   scene.add(carMesh);
   const BOT_COLORS = [0xffd23f, 0x2e86de, 0xe74c3c];
+  // [смещение от осевой в пикселях, насколько режет апекс]. Полотно шириной
+  // 118, поэтому ±26 держит машину на асфальте даже в связке поворотов.
+  const LANES = [[-17, 1.0], [17, 0.35], [0, 0.7]];
   // Запасной соперник из кубиков: едет, пока грузится его модель, и остаётся,
   // если файл не пришёл.
   function botMesh(i) {
@@ -707,6 +791,36 @@
     }, undefined, err => { modelWaiters[id] = []; console.warn('model not loaded, using blocks', err); });
   }
 
+  // Закрутка геометрии колеса вокруг его оси. У моделей, где левый борт
+  // получен зеркальным отражением правого (RX-7 FC со Sketchfab), знак
+  // закрутки противоположен, и одинаковое вращение выглядит как езда колёс
+  // в разные стороны. Считаем знак и инвертируем спин там, где он не совпал
+  // с первым колесом, — тогда рисунок дисков катится согласованно.
+  function wheelTwist(node, axis) {
+    const ai = { x: 0, y: 1, z: 2 }[axis];
+    const bi = (ai + 1) % 3, ci = (ai + 2) % 3;
+    let sum = 0, count = 0;
+    node.traverse(o => {
+      const pos = o.isMesh && o.geometry && o.geometry.attributes.position;
+      if (!pos) return;
+      const n = pos.count, step = Math.max(1, Math.floor(n / 300));   // хватает выборки
+      let ca = 0, cb = 0, cc = 0, m = 0;
+      for (let i = 0; i < n; i += step) {
+        ca += pos.getComponent(i, ai); cb += pos.getComponent(i, bi); cc += pos.getComponent(i, ci); m++;
+      }
+      if (!m) return;
+      ca /= m; cb /= m; cc /= m;
+      for (let i = 0; i < n; i += step) {
+        const b = pos.getComponent(i, bi) - cb, c = pos.getComponent(i, ci) - cc;
+        const r = Math.hypot(b, c);
+        if (r < 1e-6) continue;
+        sum += (pos.getComponent(i, ai) - ca) * (b / r);
+        count++;
+      }
+    });
+    return count ? sum / count : 0;
+  }
+
   // Клон шаблона приводится к игровым размерам (длина 52, нос вдоль +X, колёса
   // на земле), колёса вынимаются в поворотные pivot-ы. colour !== null — красим
   // кузов в цвет соперника.
@@ -766,11 +880,15 @@
       pivot.position.copy(local);
       n.parent.add(pivot); pivot.add(spin); spin.add(n);
       n.position.sub(local);                                  // узел остаётся там же, где был
-      wheels.push({ spin, pivot, front: null, wp });
+      wheels.push({ spin, pivot, front: null, wp, twist: wheelTwist(n, cfg.wheelAxis), sign: 1 });
     }
     if (wheels.length) {
       const xs = wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
       wheels.forEach(w => { w.front = w.wp.x > mid; });
+      // эталон — первое колесо с заметной закруткой; у симметричных дисков
+      // закрутка около нуля, и знак остаётся общим
+      const ref = wheels.find(w => Math.abs(w.twist) > 1e-5);
+      if (ref) wheels.forEach(w => { w.sign = Math.abs(w.twist) > 1e-5 && Math.sign(w.twist) !== Math.sign(ref.twist) ? -1 : 1; });
     }
     const holder = new THREE.Group(); holder.add(root);
     return { holder, wheels };
@@ -795,7 +913,7 @@
 
   function setTrack(id) {
     trackId = id; try { localStorage.setItem('drift.track', id); } catch (e) {}
-    buildPath(); paintWorld(); sizeMarks(); buildGround(); buildScenery();
+    buildPath(); paintWorld(); sizeMarks(); buildGround(); buildScenery(); mapPath = null;
     for (const b of $('tracks').children) b.classList.toggle('on', b.dataset.track === id);
   }
   for (const id in TRACKS) { const b = document.createElement('button'); b.type = 'button'; b.dataset.track = id; b.textContent = TRACKS[id].name; b.addEventListener('click', () => { setTrack(id); reset(); }); $('tracks').appendChild(b); }
@@ -864,13 +982,13 @@
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin * w.sign; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin * w.sign; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
@@ -891,6 +1009,7 @@
     }
     updateCamera(dt);
     renderer.render(scene, camera);
+    drawMap();
   }
 
   let last = 0, frames = 0;
@@ -1025,10 +1144,41 @@
     audioInit();
     reset();
     $('start').hidden = true; $('over').hidden = true;
+    $('map').hidden = false;
     running = true;
     if (audio.music) musicStart();
     if (document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
   }
+  // ── Мини-карта ───────────────────────────────────────────────────────────
+  // Камера смотрит вперёд, поэтому отставшие соперники уходят за кадр и
+  // кажутся пропавшими. Карта показывает, кто где, даже за поворотом.
+  const mapCv = $('map'), mapCx = mapCv.getContext('2d');
+  function buildMapPath() {
+    const s = mapCv.width / WORLD;
+    mapPath = new Path2D();
+    PATH.forEach((p, i) => (i ? mapPath.lineTo(p[0] * s, p[1] * s) : mapPath.moveTo(p[0] * s, p[1] * s)));
+    if (CLOSED) mapPath.closePath();
+  }
+  function drawMap() {
+    if (mapCv.hidden) return;
+    const w = mapCv.width, s = w / WORLD;
+    if (!mapPath) buildMapPath();
+    mapCx.clearRect(0, 0, w, w);
+    // линия тонкая: на серпантинах вроде Акины витки идут близко, и широкая
+    // полоса сливается в сплошное пятно
+    mapCx.strokeStyle = 'rgba(255,255,255,.42)';
+    mapCx.lineWidth = Math.max(2.5, TRACK_W * s * 0.3);
+    mapCx.lineJoin = mapCx.lineCap = 'round';
+    mapCx.stroke(mapPath);
+    const dot = (x, y, color, r) => {
+      mapCx.beginPath(); mapCx.arc(x * s, y * s, r, 0, 7);
+      mapCx.fillStyle = color; mapCx.fill();
+      mapCx.lineWidth = 2; mapCx.strokeStyle = 'rgba(0,0,0,.55)'; mapCx.stroke();
+    };
+    bots.forEach((b, i) => dot(b.x, b.y, '#' + BOT_COLORS[i % BOT_COLORS.length].toString(16).padStart(6, '0'), 7));
+    dot(car.x, car.y, '#ffb000', 9);
+  }
+
   // ── Гараж ────────────────────────────────────────────────────────────────
   // Очки за занос — они же валюта: отдельной экономики не вводим, чтобы не
   // разводить два счётчика, между которыми игрок будет гадать.
@@ -1106,7 +1256,7 @@
 
   $('go').addEventListener('click', start);
   $('again').addEventListener('click', start);
-  $('menu').addEventListener('click', () => { $('over').hidden = true; $('start').hidden = false; reset(); });
+  $('menu').addEventListener('click', () => { $('over').hidden = true; $('start').hidden = false; $('map').hidden = true; reset(); });
 
   reset();
   requestAnimationFrame(loop);
@@ -1119,6 +1269,7 @@
     let t = 0;
     const mode_ = new URLSearchParams(location.search).get('sim');
     if (mode_ === 'race') { setMode('race'); reset(); countdown = 0; }
+    if (mode_ === 'shot' || mode_ === 'race') $('map').hidden = false;   // кадр для проверки карты
     // ?sim=garage — снимок экрана гаража для проверки вёрстки: кредиты
     // подставляются на лету и в хранилище не попадают
     if (mode_ === 'garage') { credits = 5200; renderCredits(); renderParts();
