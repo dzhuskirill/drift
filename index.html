@@ -816,7 +816,7 @@ window.addEventListener('error', function (e) {
                 m.needsUpdate = true;
               } },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
-              eye: [0.22, 0.92],
+              eye: [0.22, 0.92], wheelOut: 1.4,
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
 
@@ -906,6 +906,14 @@ window.addEventListener('error', function (e) {
       const pivot = new THREE.Group();                        // поворот руля, вокруг Y
       const spin = new THREE.Group();                         // вращение колеса, вокруг своей оси
       pivot.position.copy(local);
+      // wheelOut выдвигает колёса наружу: у Passat они утоплены в арки так,
+      // что смотрятся отдельно от кузова. Величина задана в игровых единицах,
+      // поэтому делится на масштаб модели.
+      if (cfg.wheelOut) {
+        const ax2 = cfg.wheelAxis;
+        const dir = Math.sign(pivot.position[ax2]) || 1;
+        pivot.position[ax2] += dir * cfg.wheelOut / sc;
+      }
       n.parent.add(pivot); pivot.add(spin); spin.add(n);
       n.position.sub(local);                                  // узел остаётся там же, где был
       wheels.push({ spin, pivot, front: null, wp });
@@ -1005,7 +1013,12 @@ window.addEventListener('error', function (e) {
       camera.up.set(0, 1, 0);
     }
     const a = camInit ? 1 - Math.exp(-k * dt) : 1;
-    camPos.lerp(new THREE.Vector3(px, py, pz), a); camLook.lerp(new THREE.Vector3(lx, ly, lz), a);
+    // В кабине позиция берётся точно: сглаживание оставляет камеру позади
+    // машины, и она уезжает внутрь салона, закрывая трассу. Взгляд при этом
+    // по-прежнему догоняет плавно, иначе кадр дёргается в заносе.
+    const inCab = view === 'cockpit';
+    if (inCab) camPos.set(px, py, pz); else camPos.lerp(new THREE.Vector3(px, py, pz), a);
+    camLook.lerp(new THREE.Vector3(lx, ly, lz), a);
     camInit = true;
     camera.position.copy(camPos); camera.lookAt(camLook);
     camera.fov = view === 'cockpit' ? 75 : view === 'chase' ? 62 : 55;
@@ -1065,8 +1078,10 @@ window.addEventListener('error', function (e) {
   let last = 0, frames = 0;
   // ?auto=1 — самопроверка без рук: машина сама чередует заносы, состояние в title
   const AUTO = new URLSearchParams(location.search).get('auto');
+  let preview = false;                  // режим осмотра модели: камера своя
   function loop(ts) {
     const dt = Math.min(0.033, (ts - last) / 1000 || 0.016); last = ts; frames++;
+    if (preview) { renderer.render(scene, camera); requestAnimationFrame(loop); return; }
     if (AUTO && running) { const ph = Math.floor(ts / 1100) % 3; steer = ph === 0 ? 1 : ph === 1 ? -1 : 0; }
     if (running) step(dt);
     audioUpdate();
@@ -1322,6 +1337,27 @@ window.addEventListener('error', function (e) {
     if (mode_ === 'shot' || mode_ === 'race') $('map').hidden = false;   // кадр для проверки карты
     // ?sim=garage — снимок экрана гаража для проверки вёрстки: кредиты
     // подставляются на лету и в хранилище не попадают
+    // ?sim=model — крупный план машины сбоку: так проверяются посадка колёс
+    // и детали кузова, которые в игровом кадре слишком мелкие
+    if (mode_ === 'model') {
+      $('start').hidden = true; $('map').hidden = true;
+      $('hint').hidden = true; $('camBtn').hidden = true;
+      const shoot = () => {
+        // ждём, пока модель окажется в сцене: loadCar тоже подписан на загрузку,
+        // и его колбэк может отработать позже нашего
+        if (!gltfCar.root) { setTimeout(shoot, 120); return; }
+        $('over').hidden = true; running = false; preview = true;
+        car.x = WORLD / 2; car.y = WORLD / 2; car.a = 0; car.speed = 0;
+        draw(1 / 60);
+        const ang = +(new URLSearchParams(location.search).get('ang') || 35) * Math.PI / 180;
+        camera.position.set(car.x + Math.cos(ang) * 95, 26, car.y + Math.sin(ang) * 95);
+        camera.lookAt(car.x, 9, car.y);
+        camera.fov = 40; camera.near = 1; camera.updateProjectionMatrix();
+        renderer.render(scene, camera);
+      };
+      shoot();
+      return;
+    }
     // ?sim=cockpit — кадр из кабины уже с загруженной моделью: синхронный
     // прогон её не дожидается, поэтому рисуем по готовности
     if (mode_ === 'cockpit') {
