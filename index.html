@@ -787,12 +787,12 @@ window.addEventListener('error', function (e) {
   // body — имя материала кузова: по нему соперника красят в его цвет.
   const CARS = {
     ae86:   { file: 'ae86.glb',   name: 'Toyota AE86 Trueno', rotY: Math.PI / 2, axis: 'z', wheels: ['FL_Wheel', 'FR_Wheel', 'RL_Wheel', 'RR_Wheel'], wheelAxis: 'x',
-              body: 'Primary',
+              body: 'Primary', eye: [0.14, 0.78],
               paint: m => { if (m.name === 'Windows') { m.transparent = true; m.opacity = 0.8; }
                             if (m.name === 'Primary') { m.color.set(0xf4f4ef); m.map = null; m.roughness = 0.35; m.metalness = 0.15; m.needsUpdate = true; }
                             if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
     rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x',
-              body: 'RRRX7_Body' },
+              body: 'RRRX7_Body', eye: [0.16, 0.80] },
     rx7fc:  { file: 'rx7fc.glb',  name: 'Mazda RX-7 FC', rotY: Math.PI / 2, axis: 'z', wheelAxis: 'y',
               // ось вращения — Y: в мировых координатах модели колесо тонкое по X,
               // но вращение идёт в системе родителя узла, а там ось симметрии Y
@@ -804,7 +804,7 @@ window.addEventListener('error', function (e) {
               body: 'Material', drop: ['Object_22'],
               // руль вращает колесо вокруг вертикали, а у этой модели вертикаль —
               // локальная ось X, направленная вниз (отсюда обратный знак)
-              steerAxis: 'x', steerSign: -1,
+              steerAxis: 'x', steerSign: -1, eye: [0.16, 0.86],
               // В модели кузов задан как чистый металл (metalness 1). Без карты
               // окружения такой материал отражать нечего, и машина выглядит
               // почти чёрной. Поэтому красим кузов в белый и переводим все
@@ -816,6 +816,7 @@ window.addEventListener('error', function (e) {
                 m.needsUpdate = true;
               } },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
+              eye: [0.22, 0.92],
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
 
@@ -876,6 +877,9 @@ window.addEventListener('error', function (e) {
       let m = mine.get(o.material);
       if (!m) {
         m = o.material.clone();
+        // рисуем только лицевые грани: из кабины кузов тогда не закрывает
+        // обзор изнутри, а снаружи машина выглядит как прежде
+        m.side = THREE.FrontSide;
         if (cfg.paint) cfg.paint(m);
         if (colour != null && m.name === cfg.body) { m.color.set(colour); m.map = null; m.needsUpdate = true; }
         mine.set(o.material, m);
@@ -911,11 +915,16 @@ window.addEventListener('error', function (e) {
       wheels.forEach(w => { w.front = w.wp.x > mid; });
     }
     const holder = new THREE.Group(); holder.add(root);
-    return { holder, wheels };
+    // габариты после приведения к игровому масштабу: по ним камера в кабине
+    // садится на место водителя, а не на фиксированную высоту, годную только
+    // для блочной машины
+    const fit = new THREE.Box3().setFromObject(holder);
+    const size = fit.getSize(new THREE.Vector3());
+    return { holder, wheels, body: { len: size.x, height: size.y, width: size.z } };
   }
   let carId = 'ae86';
   try { carId = localStorage.getItem('drift.car') || 'ae86'; if (!CARS[carId]) carId = 'ae86'; } catch (e) {}
-  const gltfCar = { root: null, wheels: [], lamps: null, id: null };
+  const gltfCar = { root: null, wheels: [], lamps: null, id: null, body: null };
   function loadCar(id) {
     if (!CARS[id] || !THREE.GLTFLoader) return;
     if (gltfCar.root) { scene.remove(gltfCar.root); gltfCar.root = null; gltfCar.wheels = []; carMesh.visible = true; }
@@ -925,7 +934,7 @@ window.addEventListener('error', function (e) {
       const m = prepareModel(id, null);
       carMesh.visible = false;
       scene.add(m.holder);
-      gltfCar.root = m.holder; gltfCar.wheels = m.wheels;
+      gltfCar.root = m.holder; gltfCar.wheels = m.wheels; gltfCar.body = m.body;
     });
   }
   const qc = new URLSearchParams(location.search).get('car'); if (qc && CARS[qc]) carId = qc;
@@ -981,7 +990,15 @@ window.addEventListener('error', function (e) {
       px = tx - dirx * 120; py = 52; pz = tz - dirz * 120; lx = tx + dirx * 60; ly = 6; lz = tz + dirz * 60; k = 5;
       camera.up.set(0, 1, 0);
     } else {
-      px = tx - fx * 8; py = 21; pz = tz - fz * 8;
+      // место водителя: чуть впереди центра кузова, на уровне глаз. Так салон
+      // остаётся позади камеры и не мельтешит в кадре, а капот виден.
+      // посадка своя у каждой машины: пропорции кузовов слишком разные, чтобы
+      // одна формула сажала водителя за стекло у всех (проверено кадрами)
+      const b = gltfCar.body;
+      const eye = (CARS[gltfCar.id] && CARS[gltfCar.id].eye) || [0.14, 0.78];
+      const eyeH = b ? b.height * eye[1] : 21;
+      const eyeF = b ? b.len * eye[0] : -8;
+      px = tx + fx * eyeF; py = eyeH; pz = tz + fz * eyeF;
       const lean = car.slip * 0.35;                      // взгляд чуть уходит в сторону заноса
       const la = car.a + lean;
       lx = tx + Math.cos(la) * 120; ly = 12; lz = tz + Math.sin(la) * 120; k = 18;
@@ -991,7 +1008,9 @@ window.addEventListener('error', function (e) {
     camPos.lerp(new THREE.Vector3(px, py, pz), a); camLook.lerp(new THREE.Vector3(lx, ly, lz), a);
     camInit = true;
     camera.position.copy(camPos); camera.lookAt(camLook);
-    camera.fov = view === 'cockpit' ? 75 : view === 'chase' ? 62 : 55; camera.updateProjectionMatrix();
+    camera.fov = view === 'cockpit' ? 75 : view === 'chase' ? 62 : 55;
+    camera.near = view === 'cockpit' ? 1.5 : 3;
+    camera.updateProjectionMatrix();
   }
 
   let markFrame = 0;
@@ -1023,12 +1042,12 @@ window.addEventListener('error', function (e) {
     // передние колёса поворачиваются, все крутятся по скорости
     const spin = car.speed * dt / 4.3;
     carParts.wheels.forEach((g, i) => { g.rotation.y = i >= 2 ? -steer * 0.45 : 0; g.children.forEach(m => { m.rotation.y += spin; }); });
-    // из кабины: кузов над капотом не мешает обзору. Для glTF-моделей скрытия
-    // не было вовсе — камера оказывалась внутри кузова, и по кадру мельтешили
-    // полигоны салона (особенно заметно на низкой RX-7 FC)
+    // из кабины: у блочной машины убираем стёкла и спойлер, иначе они лезут в
+    // кадр. Настоящие модели не прячем — камера садится за лобовым стеклом,
+    // и салон остаётся позади неё.
     const inside = view === 'cockpit';
     for (const n of ['wind', 'rear', 'spoiler']) carParts[n].visible = !inside;
-    if (gltfCar.root) gltfCar.root.visible = !inside;
+
     sun.position.set(car.x - 300, 500, car.y + 200); sun.target.position.set(car.x, 0, car.y);
     if (marksDirty && (markFrame++ % 3 === 0)) { marksTex.needsUpdate = true; marksDirty = false; }
     for (let i = 0; i < smokePool.length; i++) {
@@ -1303,6 +1322,17 @@ window.addEventListener('error', function (e) {
     if (mode_ === 'shot' || mode_ === 'race') $('map').hidden = false;   // кадр для проверки карты
     // ?sim=garage — снимок экрана гаража для проверки вёрстки: кредиты
     // подставляются на лету и в хранилище не попадают
+    // ?sim=cockpit — кадр из кабины уже с загруженной моделью: синхронный
+    // прогон её не дожидается, поэтому рисуем по готовности
+    if (mode_ === 'cockpit') {
+      $('start').hidden = true; $('over').hidden = true; $('map').hidden = false;
+      running = true;
+      withModel(carId, () => {
+        for (let i = 0; i < 260; i++) { steer = i > 200 ? 1 : 0; step(1 / 60); }
+        camInit = false; updateCamera(1); draw(1 / 60);
+      });
+      return;
+    }
     if (mode_ === 'garage') { credits = 5200; renderCredits(); renderParts();
                               $('start').hidden = true; $('over').hidden = true;
                               $('garage').hidden = false; running = false; return; }
