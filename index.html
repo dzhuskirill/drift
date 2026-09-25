@@ -822,39 +822,6 @@ window.addEventListener('error', function (e) {
     });
   }
 
-  // Закрутка геометрии колеса вокруг его оси. У моделей, где левый борт
-  // получен зеркальным отражением правого (RX-7 FC со Sketchfab), знак
-  // закрутки противоположен, и одинаковое вращение выглядит как езда колёс
-  // в разные стороны. Считаем знак и инвертируем спин там, где он не совпал
-  // с первым колесом, — тогда рисунок дисков катится согласованно.
-  function wheelTwist(node, axis) {
-    const ai = { x: 0, y: 1, z: 2 }[axis];
-    const bi = (ai + 1) % 3, ci = (ai + 2) % 3;
-    let sum = 0, count = 0;
-    node.traverse(o => {
-      const pos = o.isMesh && o.geometry && o.geometry.attributes.position;
-      if (!pos) return;
-      // getX/getY/getZ есть и у обычного атрибута, и у чередующегося, а вот
-      // getComponent — не у всех: обращение к нему роняло загрузку моделей
-      const n = pos.count, step = Math.max(1, Math.floor(n / 300));   // хватает выборки
-      const at = (i, k) => (k === 0 ? pos.getX(i) : k === 1 ? pos.getY(i) : pos.getZ(i));
-      let ca = 0, cb = 0, cc = 0, m = 0;
-      for (let i = 0; i < n; i += step) {
-        ca += at(i, ai); cb += at(i, bi); cc += at(i, ci); m++;
-      }
-      if (!m) return;
-      ca /= m; cb /= m; cc /= m;
-      for (let i = 0; i < n; i += step) {
-        const b = at(i, bi) - cb, c = at(i, ci) - cc;
-        const r = Math.hypot(b, c);
-        if (r < 1e-6) continue;
-        sum += (at(i, ai) - ca) * (b / r);
-        count++;
-      }
-    });
-    return count ? sum / count : 0;
-  }
-
   // Клон шаблона приводится к игровым размерам (длина 52, нос вдоль +X, колёса
   // на земле), колёса вынимаются в поворотные pivot-ы. colour !== null — красим
   // кузов в цвет соперника.
@@ -914,15 +881,11 @@ window.addEventListener('error', function (e) {
       pivot.position.copy(local);
       n.parent.add(pivot); pivot.add(spin); spin.add(n);
       n.position.sub(local);                                  // узел остаётся там же, где был
-      wheels.push({ spin, pivot, front: null, wp, twist: wheelTwist(n, cfg.wheelAxis), sign: 1 });
+      wheels.push({ spin, pivot, front: null, wp });
     }
     if (wheels.length) {
       const xs = wheels.map(w => w.wp.x), mid = (Math.min(...xs) + Math.max(...xs)) / 2;
       wheels.forEach(w => { w.front = w.wp.x > mid; });
-      // эталон — первое колесо с заметной закруткой; у симметричных дисков
-      // закрутка около нуля, и знак остаётся общим
-      const ref = wheels.find(w => Math.abs(w.twist) > 1e-5);
-      if (ref) wheels.forEach(w => { w.sign = Math.abs(w.twist) > 1e-5 && Math.sign(w.twist) !== Math.sign(ref.twist) ? -1 : 1; });
     }
     const holder = new THREE.Group(); holder.add(root);
     return { holder, wheels };
@@ -1016,13 +979,13 @@ window.addEventListener('error', function (e) {
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin * w.sign; if (w.front) w.pivot.rotation.y += ((steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin * w.sign; if (w.front) w.pivot.rotation.y += ((b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
