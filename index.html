@@ -820,6 +820,9 @@ window.addEventListener('error', function (e) {
               // решётка и накладки в модели хромированные и на светлом кузове
               // сливаются — переводим их в чёрный
               paint: m => { if (m.name === 'chrome') { m.color.set(0x1d1d1f); m.metalness = 0.35; m.roughness = 0.45; m.needsUpdate = true; } },
+              // накладки арок в модели шире кузова и торчат наружу — поджимаем
+              // их к центру по поперечной оси
+              tuck: { nodes: ['arch', 'arch.001', 'arch.002', 'arch.003'], amount: 1.6 },
               // Решётку отдельно покрасить нельзя: в модели она не выделена в
               // самостоятельный узел, а входит в общий меш кузова. Подсветка
               // узлов (?probe=1) это подтвердила — отдельными деталями спереди
@@ -910,6 +913,20 @@ window.addEventListener('error', function (e) {
         if (key) named[key].traverse(o => {
           if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: cfg.probe[want] });
         });
+      }
+    }
+    if (cfg.tuck) {
+      const cl2 = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+      const ax3 = cfg.wheelAxis;                    // поперечная ось кузова
+      for (const want of cfg.tuck.nodes) {
+        const key = keys.find(x => cl2(x) === cl2(want) || cl2(x).startsWith(cl2(want) + '_'));
+        if (!key) continue;
+        const node = named[key];
+        // сторона определяется по центру геометрии, а не по позиции узла:
+        // в этой модели узлы стоят в нуле, а смещена сама геометрия
+        const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
+        const side = ax3 === 'x' ? c.x : ax3 === 'y' ? c.y : c.z;
+        node.position[ax3] -= Math.sign(side) * cfg.tuck.amount / sc;
       }
     }
     if (cfg.blacken) {
