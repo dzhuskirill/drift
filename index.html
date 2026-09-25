@@ -800,7 +800,17 @@ window.addEventListener('error', function (e) {
               // разбором геометрии — диски и покрышки стоят по углам парами
               wheels: ['Object_19', 'Object_24', 'Object_27', 'Object_30',
                        'Object_20', 'Object_25', 'Object_28', 'Object_31'],
-              body: 'Material', drop: ['Object_22'] },
+              body: 'Material', drop: ['Object_22'],
+              // В модели кузов задан как чистый металл (metalness 1). Без карты
+              // окружения такой материал отражать нечего, и машина выглядит
+              // почти чёрной. Поэтому красим кузов в белый и переводим все
+              // зеркальные материалы в умеренный блеск.
+              paint: m => {
+                if (m.name === 'Material') { m.color.set(0xf2f2ee); m.map = null; }
+                if (m.metalness !== undefined && m.metalness > 0.6) m.metalness = 0.2;
+                if (m.roughness !== undefined && m.roughness > 0.9) m.roughness = 0.45;
+                m.needsUpdate = true;
+              } },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
