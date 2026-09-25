@@ -979,19 +979,19 @@ window.addEventListener('error', function (e) {
     if (gltfCar.root) {
       const spin = car.speed * dt / 4.3;
       const ax = CARS[gltfCar.id].wheelAxis;
-      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of gltfCar.wheels) { w.spin.rotation[ax] -= spin; if (w.front) w.pivot.rotation.y += ((-steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     for (const b of bots) {
       b.mesh.position.set(b.x, 0, b.y); b.mesh.rotation.y = -b.a; b.mesh.rotation.z = -b.slip * 0.06;
       if (!b.wheels.length) continue;
       const bax = CARS[b.carId].wheelAxis, bspin = b.speed * dt / 4.3;
-      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
+      for (const w of b.wheels) { w.spin.rotation[bax] -= bspin; if (w.front) w.pivot.rotation.y += ((-b.steer * 0.35) - w.pivot.rotation.y) * Math.min(1, 10 * dt); }
     }
     const lampsUp = steer !== 0 || car.depth > 0.2;
     for (const z of [-6.5, 6.5]) { carParts['lamp' + z].position.y = lampsUp ? 14.4 : 12.2; carParts['beam' + z].visible = lampsUp; }
     // передние колёса поворачиваются, все крутятся по скорости
     const spin = car.speed * dt / 4.3;
-    carParts.wheels.forEach((g, i) => { g.rotation.y = i >= 2 ? steer * 0.45 : 0; g.children.forEach(m => { m.rotation.y += spin; }); });
+    carParts.wheels.forEach((g, i) => { g.rotation.y = i >= 2 ? -steer * 0.45 : 0; g.children.forEach(m => { m.rotation.y += spin; }); });
     // из кабины: кузов над капотом не мешает обзору
     const inside = view === 'cockpit';
     for (const n of ['wind', 'rear', 'spoiler']) carParts[n].visible = !inside;
