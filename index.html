@@ -816,7 +816,15 @@ window.addEventListener('error', function (e) {
                 m.needsUpdate = true;
               } },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
-              eye: [0.22, 0.92], wheelOut: 1.4,
+              eye: [0.22, 0.92], wheelOut: 0.7,
+              // решётка и накладки в модели хромированные и на светлом кузове
+              // сливаются — переводим их в чёрный
+              paint: m => { if (m.name === 'chrome') { m.color.set(0x1d1d1f); m.metalness = 0.35; m.roughness = 0.45; m.needsUpdate = true; } },
+              // Решётку отдельно покрасить нельзя: в модели она не выделена в
+              // самостоятельный узел, а входит в общий меш кузова. Подсветка
+              // узлов (?probe=1) это подтвердила — отдельными деталями спереди
+              // идут только эмблема и уплотнители.
+              probe: { 'desirefx.me_006': 0xff0000, 'desirefx.me_002': 0x00ff00, 'desirefx.me_005': 0x0000ff, 'desirefx.me_001': 0xffff00 },
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
 
@@ -877,9 +885,6 @@ window.addEventListener('error', function (e) {
       let m = mine.get(o.material);
       if (!m) {
         m = o.material.clone();
-        // рисуем только лицевые грани: из кабины кузов тогда не закрывает
-        // обзор изнутри, а снаружи машина выглядит как прежде
-        m.side = THREE.FrontSide;
         if (cfg.paint) cfg.paint(m);
         if (colour != null && m.name === cfg.body) { m.color.set(colour); m.map = null; m.needsUpdate = true; }
         mine.set(o.material, m);
@@ -888,6 +893,33 @@ window.addEventListener('error', function (e) {
     });
     const named = {}; root.traverse(o => { named[o.name] = o; });
     const keys = Object.keys(named);
+    // ?probe=1 — временная подсветка узлов разными цветами, чтобы понять,
+    // какой меш за что отвечает
+    if (new URLSearchParams(location.search).get('names')) {
+      const cl1 = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+      const hit = (cfg.blacken || []).map(w => {
+        const k = keys.find(x => cl1(x) === cl1(w) || cl1(x).startsWith(cl1(w) + '_'));
+        return w + '→' + (k || 'НЕ НАЙДЕН');
+      });
+      document.title = 'blacken: ' + hit.join(' , ') + ' || узлов ' + keys.length;
+    }
+    if (cfg.probe && new URLSearchParams(location.search).get('probe')) {
+      const cl0 = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+      for (const want in cfg.probe) {
+        const key = keys.find(x => cl0(x) === cl0(want) || cl0(x).startsWith(cl0(want) + '_'));
+        if (key) named[key].traverse(o => {
+          if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: cfg.probe[want] });
+        });
+      }
+    }
+    if (cfg.blacken) {
+      const dark = new THREE.MeshStandardMaterial({ color: 0x17181a, roughness: 0.6, metalness: 0.2 });
+      const cl = x => x.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
+      for (const want of cfg.blacken) {
+        const key = keys.find(x => cl(x) === cl(want) || cl(x).startsWith(cl(want) + '_'));
+        if (key) named[key].traverse(o => { if (o.isMesh) o.material = dark; });
+      }
+    }
     // GLTFLoader чистит имена узлов (точки выбрасывает), а у Passat к имени
     // приклеен хвост материала: desirefx.me_010 в файле становится
     // desirefxme_010_wire_204204204_0. Поэтому сверяем по очищенному префиксу.
