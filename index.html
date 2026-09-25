@@ -73,9 +73,11 @@
   <div class="opts cars" id="diffs"><button type="button" data-diff="novice">Новичок</button><button type="button" data-diff="amateur">Любитель</button><button type="button" data-diff="pro">Профессионал</button></div>
   <div class="sub" style="font-size:12px;margin-top:-2px">уровень соперников в гонке</div>
   <div class="opts cars" id="tracks"></div>
+  <div class="opts cars"><button type="button" id="garageBtn">Гараж · <b id="creditsMenu">0</b> очков</button></div>
   <div class="opts cars" id="cars">
     <button type="button" data-car="ae86">AE86 Trueno</button>
     <button type="button" data-car="rx7">RX-7 FD</button>
+    <button type="button" data-car="rx7fc">RX-7 FC</button>
     <button type="button" data-car="passat">Passat Alltrack</button>
   </div>
   <div class="sub" style="font-size:12px;margin-top:6px">Модели: AE86 — Martin Trafas; Passat B8 Variant — Nieve5677 (Sketchfab, CC BY 4.0)</div>
@@ -83,6 +85,15 @@
     <label><input type="checkbox" id="optSfx" checked> звук шин и мотора</label>
     <label><input type="checkbox" id="optMusic" checked> евробит</label>
     <label class="file">своя музыка (mp3 с телефона) <input type="file" id="optFile" accept="audio/*"></label>
+  </div>
+</div>
+<div class="overlay" id="garage" hidden>
+  <h1>Гараж</h1>
+  <div class="sub" style="font-size:13px">Очки за заносы — валюта. Улучшения меняют машину в обе стороны: и в тренировке, и в гонке. Соперники подтягиваются следом, но не вровень — с каждым уровнем разрыв понемногу работает на вас.</div>
+  <div class="sub" style="font-size:15px;margin:6px 0"><b id="credits">0</b> очков в запасе</div>
+  <div id="parts"></div>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
+    <button type="button" id="garageBack" style="background:#2a2f36;color:var(--ink)">Назад</button>
   </div>
 </div>
 <div class="overlay" id="over" hidden>
@@ -205,6 +216,53 @@
     amateur: { name: 'Любитель',     look: 55, lookStep: 10, thr: 0.06, thrStep: 0.020, maxK: 0.97, maxKStep: 0.025, brake: 0.12 },
     pro:     { name: 'Профессионал', look: 60, lookStep:  8, thr: 0.04, thrStep: 0.012, maxK: 1.05, maxKStep: 0.020, brake: 0.18 },
   };
+  // ── Тюнинг: четыре узла по три уровня ────────────────────────────────────
+  // Узлы названы по тем параметрам, что в физике реально есть. Тормозов в
+  // модели нет, поэтому вместо них аэродинамика: рисовать ручку, которая ни
+  // на что не влияет, нечестно.
+  const TUNE_PARTS = [
+    { id: 'engine', name: 'Двигатель',    hint: 'разгон и потолок скорости' },
+    { id: 'tyres',  name: 'Резина',       hint: 'держак на дуге, занос ловится легче' },
+    { id: 'susp',   name: 'Подвеска',     hint: 'острее руль, ровнее выход из заноса' },
+    { id: 'aero',   name: 'Аэродинамика', hint: 'меньше потерь на прямых' },
+  ];
+  const TUNE_MAX = 3;
+  const TUNE_COST = [0, 1200, 3000, 6500];      // цена перехода на уровень 1, 2, 3
+  // Доля прокачки, которую получают соперники. Меньше единицы — значит с
+  // каждым уровнем разрыв медленно растёт в пользу игрока, но соперники не
+  // превращаются в стоячие мишени (решение Кирилла 25.09.2026).
+  const BOT_TUNE_SHARE = 0.75;
+
+  let tune = { engine: 0, tyres: 0, susp: 0, aero: 0 };
+  let credits = 0;
+  try {
+    const raw = JSON.parse(localStorage.getItem('drift.tune') || 'null');
+    if (raw) for (const p of TUNE_PARTS) tune[p.id] = Math.min(TUNE_MAX, Math.max(0, raw[p.id] | 0));
+    credits = Math.max(0, +localStorage.getItem('drift.credits') || 0);
+  } catch (e) {}
+  function saveTune() {
+    try {
+      localStorage.setItem('drift.tune', JSON.stringify(tune));
+      localStorage.setItem('drift.credits', credits);
+    } catch (e) {}
+  }
+  // Множители к параметрам физики. share < 1 ослабляет эффект — так считаются
+  // соперники, которые подтягиваются за игроком, но не вровень.
+  function tuneFactors(lv, share) {
+    const k = (per, level) => 1 + per * level * (share === undefined ? 1 : share);
+    return {
+      accel:  k(0.09, lv.engine),
+      maxK:   k(0.045, lv.engine),
+      gripN:  k(0.06, lv.tyres),
+      gripC:  k(0.10, lv.tyres),
+      turn:   k(0.055, lv.susp),
+      settle: k(0.07, lv.susp),
+      drag:   k(-0.055, lv.aero),
+    };
+  }
+  const TUNE_NEUTRAL = tuneFactors({ engine: 0, tyres: 0, susp: 0, aero: 0 });
+  function tuneLevelSum() { return TUNE_PARTS.reduce((a, p) => a + tune[p.id], 0); }
+
   let diff = 'novice';
   try { diff = localStorage.getItem('drift.diff') || 'novice'; } catch (e) {} if (!DIFFS[diff]) diff = 'novice';
   const qd = new URLSearchParams(location.search).get('diff'); if (DIFFS[qd]) diff = qd;
@@ -223,6 +281,8 @@
   }
   function reset() {
     const race = mode === 'race';
+    car.tf = tuneFactors(tune);                        // игрок получает свой тюнинг целиком
+    const botTf = tuneFactors(tune, BOT_TUNE_SHARE);   // соперники — три четверти от него
     placeCar(car, race ? 8 : (CLOSED ? 0 : 4), race ? 22 : 0, race ? 0 : 60);
     laps = 0; lastIdx = car.lastIdx;
     score = 0; combo = 1; comboTimer = 0; driftRun = 0; series = 0; bestDrift = 0;
@@ -233,7 +293,7 @@
       const b = { x: 0, y: 0, a: 0, vx: 0, vy: 0, slip: 0, speed: 0, w: 0, depth: 0, hold: 0, steer: 0,
         look: D.look + i * D.lookStep, thr: D.thr + i * D.thrStep,
         maxK: D.maxK + i * D.maxKStep, maxKBase: D.maxK + i * D.maxKStep, brake: D.brake,
-        mesh: botMesh(i), wheels: [], carId: null, prog: 0 };
+        mesh: botMesh(i), wheels: [], carId: null, prog: 0, tf: botTf };
       placeCar(b, i === 0 ? 8 : 0, i === 0 ? -22 : (i === 1 ? 22 : -22), 0);
       bots.push(b); scene.add(b.mesh);
       dressBot(b, i);
@@ -265,23 +325,27 @@
     c.depth += (target - c.depth) * (drifting ? 3.5 : 0.6) * dt;
     const depth = c.depth;
 
-    vf += P.accel * dt * (1 - Math.max(0, vf) / (P.maxSpeed * c.maxK * SPEEDK));
-    vf *= Math.exp(-P.drag * dt * (1 + 0.45 * depth));
+    const tf = c.tf || TUNE_NEUTRAL;                       // множители тюнинга
+    vf += P.accel * tf.accel * dt * (1 - Math.max(0, vf) / (P.maxSpeed * c.maxK * tf.maxK * SPEEDK));
+    vf *= Math.exp(-P.drag * tf.drag * dt * (1 + 0.45 * depth));
     // Сцепление в заносе: до «рабочего» угла (~35°) резина скользит свободно,
     // за ним сцепление быстро растёт — угол упирается в равновесие и держится,
     // пока держат палец. Так весь поворот проходится в скольжении.
     const sl0 = Math.abs(c.slip);
     const over = Math.max(0, sl0 - P.slipHold) / 0.25;
-    const grip = P.gripNormal + (P.gripDrift - P.gripNormal) * depth + over * over * P.gripCatch * depth;
+    // резина поднимает держак на дуге и способность поймать занос, но не
+    // трогает сцепление в самом скольжении — иначе прокачка убила бы дрифт
+    const grip = P.gripNormal * tf.gripN + (P.gripDrift - P.gripNormal * tf.gripN) * depth
+                 + over * over * P.gripCatch * tf.gripC * depth;
     vl *= Math.exp(-grip * dt);
 
     // вращение корпуса — через угловую скорость с инерцией: руль задаёт
     // целевую скорость, корпус набирает и сбрасывает её не мгновенно
     const speedFactor = Math.min(1, c.speed / 180);
-    const turnTarget = st * (P.turnNormal + (P.turnDrift - P.turnNormal) * depth) * speedFactor;
+    const turnTarget = st * (P.turnNormal + (P.turnDrift - P.turnNormal) * depth) * speedFactor * tf.turn;
     c.w += (turnTarget - c.w) * (st ? 6 : 1.5) * dt;
     c.a += c.w * dt;
-    if (!st) c.a += c.slip * (2.2 - 1.5 * depth) * dt;   // самовыравнивание, пропорционально углу
+    if (!st) c.a += c.slip * (2.2 - 1.5 * depth) * tf.settle * dt;   // самовыравнивание, пропорционально углу
 
     c.vx = f[0] * vf + r[0] * vl; c.vy = f[1] * vf + r[1] * vl;
     c.x += c.vx * dt; c.y += c.vy * dt;
@@ -394,6 +458,7 @@
     musicStop();
     const total = Math.floor(score);
     if (total > best) { best = total; try { localStorage.setItem('drift.best', best); } catch (e) {} }
+    earn(total);
     $('best').textContent = best;
     const t = raceT, mm = Math.floor(t / 60), ss = (t % 60).toFixed(2).padStart(5, '0');
     if (mode === 'race') {
@@ -414,6 +479,7 @@
     const total = Math.floor(score);
     let isRecord = false;
     if (total > best) { best = total; isRecord = true; try { localStorage.setItem('drift.best', best); } catch (e) {} }
+    earn(total);
     $('best').textContent = best;
     $('recLabel').textContent = isRecord ? 'Новый рекорд!' : 'Вылет с трассы';
     $('finalScore').textContent = total;
@@ -617,6 +683,12 @@
                             if (m.name === 'Secondary') { m.color.set(0x141414); m.map = null; m.roughness = 0.5; m.needsUpdate = true; } } },
     rx7:    { file: 'rx7.glb',    name: 'Mazda RX-7 FD', rotY: Math.PI / 2, axis: 'z', wheels: ['W_FL', 'W_FR', 'W_RL', 'W_RR'], wheelAxis: 'x',
               body: 'RRRX7_Body' },
+    rx7fc:  { file: 'rx7fc.glb',  name: 'Mazda RX-7 FC', rotY: Math.PI / 2, axis: 'z', wheelAxis: 'x',
+              // модель со Sketchfab: узлы безымянные, поэтому колёса и кузов найдены
+              // разбором геометрии — диски и покрышки стоят по углам парами
+              wheels: ['Object_19', 'Object_24', 'Object_27', 'Object_30',
+                       'Object_20', 'Object_25', 'Object_28', 'Object_31'],
+              body: 'Material', drop: ['Object_22'] },
     passat: { file: 'passat.glb', name: 'VW Passat B8 Alltrack', rotY: Math.PI, axis: 'x', wheelAxis: 'z', body: 'paint',
               wheels: ['desirefx.me_010', 'desirefx.me_013', 'desirefx.me_028', 'desirefx.me_029', 'desirefx.me_007', 'desirefx.me_009', 'desirefx.me_011', 'desirefx.me_012'] },
   };
@@ -641,6 +713,14 @@
   function prepareModel(id, colour) {
     const cfg = CARS[id];
     const root = modelCache[id].clone(true);
+    // Sketchfab кладёт под машину плоскость с нарисованной тенью. В игре своя
+    // тень и свой асфальт, а габарит модели такая плоскость раздувает почти
+    // вдвое по ширине — поэтому перечисленные узлы выбрасываем до замеров.
+    if (cfg.drop) {
+      const kill = [];
+      root.traverse(o => { if (cfg.drop.includes(o.name)) kill.push(o); });
+      for (const o of kill) if (o.parent) o.parent.remove(o);
+    }
     const box = new THREE.Box3().setFromObject(root);
     const len = cfg.axis === 'z' ? box.max.z - box.min.z : box.max.x - box.min.x, sc = 52 / len;
     root.scale.setScalar(sc); root.rotation.y = cfg.rotY;
@@ -949,6 +1029,81 @@
     if (audio.music) musicStart();
     if (document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
   }
+  // ── Гараж ────────────────────────────────────────────────────────────────
+  // Очки за занос — они же валюта: отдельной экономики не вводим, чтобы не
+  // разводить два счётчика, между которыми игрок будет гадать.
+  function earn(points) {
+    if (!(points > 0)) return;
+    credits += Math.round(points);
+    saveTune();
+    renderCredits();
+  }
+  function renderCredits() {
+    const txt = credits.toLocaleString('ru-RU');
+    $('credits').textContent = txt;
+    $('creditsMenu').textContent = txt;
+  }
+  function renderParts() {
+    const box = $('parts');
+    box.textContent = '';
+    for (const part of TUNE_PARTS) {
+      const lv = tune[part.id];
+      const cost = lv < TUNE_MAX ? TUNE_COST[lv + 1] : null;
+      const row = document.createElement('div');
+      row.className = 'opts cars';
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;justify-content:space-between;margin:6px 0';
+
+      const left = document.createElement('div');
+      left.style.cssText = 'text-align:left;flex:1 1 auto';
+      const title = document.createElement('div');
+      title.style.cssText = 'display:flex;align-items:center;gap:6px';
+      const nm = document.createElement('b'); nm.textContent = part.name;
+      title.append(nm);
+      // полоска уровня рисуется блоками, а не символами: в системном шрифте
+      // телефона нужных знаков может не оказаться, и вместо шкалы будут квадраты
+      for (let i = 0; i < TUNE_MAX; i++) {
+        const seg = document.createElement('span');
+        seg.style.cssText = 'width:14px;height:8px;border-radius:2px;display:inline-block;' +
+          'background:' + (i < lv ? 'var(--accent, #ffb000)' : 'rgba(255,255,255,.18)');
+        title.append(seg);
+      }
+      const hint = document.createElement('div');
+      hint.textContent = part.hint;
+      hint.style.cssText = 'font-size:12px;opacity:.7';
+      left.append(title, hint);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      if (cost === null) {
+        btn.textContent = 'максимум';
+        btn.disabled = true;
+      } else {
+        btn.textContent = cost.toLocaleString('ru-RU') + ' очков';
+        btn.disabled = credits < cost;
+        btn.addEventListener('click', () => {
+          if (credits < cost || tune[part.id] >= TUNE_MAX) return;
+          credits -= cost;
+          tune[part.id]++;
+          saveTune();
+          renderCredits();
+          renderParts();
+          reset();                       // машина сразу едет по новым настройкам
+        });
+      }
+      if (btn.disabled) btn.style.opacity = '.45';
+      row.append(left, btn);
+      box.append(row);
+    }
+  }
+  $('garageBtn').addEventListener('click', () => {
+    renderCredits(); renderParts();
+    $('start').hidden = true; $('garage').hidden = false;
+  });
+  $('garageBack').addEventListener('click', () => {
+    $('garage').hidden = true; $('start').hidden = false;
+  });
+  renderCredits();
+
   $('go').addEventListener('click', start);
   $('again').addEventListener('click', start);
   $('menu').addEventListener('click', () => { $('over').hidden = true; $('start').hidden = false; reset(); });
@@ -964,6 +1119,11 @@
     let t = 0;
     const mode_ = new URLSearchParams(location.search).get('sim');
     if (mode_ === 'race') { setMode('race'); reset(); countdown = 0; }
+    // ?sim=garage — снимок экрана гаража для проверки вёрстки: кредиты
+    // подставляются на лету и в хранилище не попадают
+    if (mode_ === 'garage') { credits = 5200; renderCredits(); renderParts();
+                              $('start').hidden = true; $('over').hidden = true;
+                              $('garage').hidden = false; running = false; return; }
     for (let i = 0; i < 12000 && running; i++) {
       if (mode_ === 'pilot' || mode_ === 'shot' || mode_ === 'race') {
         // автопилот-«человек»: смотрит на точку трассы впереди и держит палец,
